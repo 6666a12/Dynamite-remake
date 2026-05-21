@@ -1,3 +1,0 @@
-C:\Users\fzm12\Desktop\Dynamite app\dynamite-rebuild\android\app\src\main\cpp\CMakeLists.txt
-C:\Users\fzm12\Desktop\Dynamite app\dynamite-rebuild\core\CMakeLists.txt
-C:\Users\fzm12\Desktop\Dynamite app\dynamite-rebuild\core\third_party\SDL3\CMakeLists.txt
