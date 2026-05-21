@@ -5,3 +5,5 @@
 /core/third_party/glm
 /core/third_party/miniaudio
 /core/third_party/SDL3
+.md
+!README.md
