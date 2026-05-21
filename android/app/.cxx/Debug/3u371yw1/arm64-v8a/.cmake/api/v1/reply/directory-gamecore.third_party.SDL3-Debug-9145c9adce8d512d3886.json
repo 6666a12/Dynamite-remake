@@ -1,0 +1,14 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : [],
+		"nodes" : []
+	},
+	"installers" : [],
+	"paths" : 
+	{
+		"build" : "gamecore/third_party/SDL3",
+		"source" : "C:/Users/fzm12/Desktop/Dynamite app/dynamite-rebuild/core/third_party/SDL3"
+	}
+}

@@ -1,0 +1,24 @@
+{
+  "name": "default",
+  "version": 1,
+  "colors": {
+    "accent_cyan": "#00D9FF",
+    "accent_blue": "#4A9EFF",
+    "accent_red": "#FF4444",
+    "accent_green": "#44FF88",
+    "accent_magenta": "#FF00A0",
+    "accent_gold": "#FFD700",
+    "bg_primary": "#0F0F0F",
+    "bg_panel": "#1A1A1A",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "#AAAAAA"
+  },
+  "ui": {
+    "header_height": 56,
+    "card_corner_radius": 8,
+    "button_corner_radius": 8,
+    "capsule_corner_radius": 24,
+    "hatch_angle": 45,
+    "hatch_scale": 8
+  }
+}
