@@ -1,3 +1,7 @@
 /android
 /ios
 /tools
+/core/third_party/json
+/core/third_party/glm
+/core/third_party/miniaudio
+/core/third_party/SDL3
