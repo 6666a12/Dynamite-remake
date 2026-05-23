@@ -75,6 +75,10 @@ public:
     const Texture* getNoteHoldZeroTex() const { return note_hold_zero_tex_.get(); }
     const Texture* getEffectTex(const std::string& name, int index) const;
 
+    // 获取当前屏幕尺寸
+    int screenWidth() const { return screen_w_; }
+    int screenHeight() const { return screen_h_; }
+
 private:
     uint32_t vao_ = 0, vbo_ = 0, ibo_ = 0;
     uint32_t shader_program_ = 0;

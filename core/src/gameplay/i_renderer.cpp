@@ -7,24 +7,46 @@
 // ============================================================
 
 void RenderBatchRenderer::DrawRect(float x, float y, float w, float h, uint32_t color) {
-    batch_.submitRect(x, y, w, h, color);
+    batch_.submitRect(
+        x * scale_ + offset_x_,
+        y * scale_ + offset_y_,
+        w * scale_,
+        h * scale_,
+        color);
 }
 
 void RenderBatchRenderer::DrawRoundedRect(float x, float y, float w, float h,
                                            float radius, uint32_t color) {
-    batch_.submitRoundedRect(x, y, w, h, radius, color);
+    batch_.submitRoundedRect(
+        x * scale_ + offset_x_,
+        y * scale_ + offset_y_,
+        w * scale_,
+        h * scale_,
+        radius * scale_,
+        color);
 }
 
 void RenderBatchRenderer::DrawTexture(const Texture* tex, float x, float y,
                                        float w, float h, uint32_t color,
                                        float uv_x, float uv_y,
                                        float uv_w, float uv_h) {
-    batch_.submit(tex, x, y, w, h, color, 0.0f, uv_x, uv_y, uv_w, uv_h);
+    batch_.submit(
+        tex,
+        x * scale_ + offset_x_,
+        y * scale_ + offset_y_,
+        w * scale_,
+        h * scale_,
+        color, 0.0f,
+        uv_x, uv_y, uv_w, uv_h);
 }
 
 void RenderBatchRenderer::DrawText(const std::string& text, float x, float y,
                                     float scale, uint32_t color) {
-    batch_.submitText(text, x, y, scale, color);
+    batch_.submitText(text,
+        x * scale_ + offset_x_,
+        y * scale_ + offset_y_,
+        scale * scale_,
+        color);
 }
 
 const Texture* RenderBatchRenderer::GetNoteTapTex() const {

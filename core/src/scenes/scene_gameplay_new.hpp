@@ -55,6 +55,13 @@ private:
     bool is_playing_ = false;
     float note_speed_ = 1.3f;
 
+    // ---- 视口变换（等比例缩放 + 居中）----
+    float screen_w_ = 0.0f;  // 物理屏幕宽
+    float screen_h_ = 0.0f;  // 物理屏幕高
+    float viewport_scale_ = 1.0f;
+    float viewport_off_x_ = 0.0f;
+    float viewport_off_y_ = 0.0f;
+
     // ---- 渲染子系统（新架构 v1.1）----
     std::shared_ptr<IRenderer> renderer_;
     std::unique_ptr<BackgroundRenderer> bg_renderer_;

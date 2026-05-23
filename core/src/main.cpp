@@ -1,8 +1,9 @@
 /**
- * Dynamite 重构项目 —— C++ GameCore 入口
+ * Dynamite Rebuild Project --- C++ GameCore Entry
  * 
- * 平台：Android / iOS / Desktop(开发调试用)
- * 架构：SDL3 + OpenGL ES 3.0 + miniaudio
+ * Platforms: Android / iOS / Desktop (debug)
+ * Architecture: SDL3 + OpenGL ES 3.0 + miniaudio
+ * Coordinate system: 1920x1080 design resolution, 16:9 letterbox viewport
  */
 
 #include <SDL3/SDL.h>
@@ -27,23 +28,24 @@
 #include "scenes/scene_base.h"
 #include "scenes/scene_main_menu.h"
 #include "scenes/scene_song_select.h"
-#include "scenes/scene_gameplay.h"
+#include "scenes/scene_gameplay_new.hpp"
 #include "scenes/scene_result.h"
 #include "scenes/scene_shop.h"
 #include "bridge/go_bridge.h"
 #include "utils/logger.h"
+#include "utils/config_manager.h"
 
-// 桌面开发调试入口
+// Desktop development entry point
 int main(int argc, char** argv) {
     (void)argc; (void)argv;
 
-    // 1. 初始化 SDL3
+    // 1. Init SDL3
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_AUDIO)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_Init failed: %s", SDL_GetError());
         return 1;
     }
 
-    // 2. 创建窗口与 GL 上下文
+    // 2. Create window and GL context
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
@@ -65,9 +67,35 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    SDL_GL_SetSwapInterval(0); // Android 上 VSync 可能异常阻塞，关闭后手动限帧
+    // VSync: enabled, frame rate synced to display refresh rate
+    SDL_GL_SetSwapInterval(1);
 
-    // 3. 初始化子系统
+    // 3. Init config manager (detects screen params on first launch)
+    {
+        std::string configPath;
+#if defined(__ANDROID__)
+        configPath = std::string(SDL_GetAndroidInternalStoragePath()) + "/config.json";
+#else
+        configPath = "./config.json";
+#endif
+        ConfigManager::instance().init(configPath);
+
+        int detected_w = 0, detected_h = 0;
+        float detected_refresh = 60.0f;
+        SDL_GetWindowSize(window, &detected_w, &detected_h);
+        SDL_DisplayMode mode;
+        if (SDL_GetCurrentDisplayMode(0, &mode)) {
+            detected_refresh = mode.refresh_rate;
+        }
+        ConfigManager::instance().setScreenWidth(detected_w);
+        ConfigManager::instance().setScreenHeight(detected_h);
+        ConfigManager::instance().setRefreshRate(static_cast<int>(detected_refresh));
+        ConfigManager::instance().save();
+
+        Logger::info("Screen: {}x{} @{}Hz", detected_w, detected_h, static_cast<int>(detected_refresh));
+    }
+
+    // 4. Init subsystems
     RenderBatch batch;
     batch.init();
 
@@ -81,14 +109,13 @@ int main(int argc, char** argv) {
     }
 #endif
 
-    // 4. 初始化 Go DataLayer（桌面模式 mock）
+    // 5. Init Go DataLayer (desktop mock)
     GoBridge::init("./game.db");
 
-    // 5. 场景栈
+    // 6. Scene stack
     std::vector<std::unique_ptr<SceneBase>> scene_stack;
 
 #if defined(__ANDROID__)
-    // Android 初步 APK：直接加载 GIGA 谱面，播放完后自动退出
     auto gameplay = std::make_unique<SceneGameplay>();
     scene_stack.push_back(std::move(gameplay));
 #else
@@ -111,17 +138,17 @@ int main(int argc, char** argv) {
     }
 #endif
 
-    // 6. 主循环
+    // 7. Main loop
     bool running = true;
     while (running) {
-        // 音频时钟作为唯一时间基准
+        // Audio clock as single time base
 #if defined(__ANDROID__)
         int64_t audio_now = static_cast<int64_t>(gameplay_scene->audioClock().nowMs());
 #else
         int64_t audio_now = static_cast<int64_t>(audio.clock().nowMs());
 #endif
 
-        // --- 输入收集 ---
+        // --- Input collection ---
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) {
@@ -138,13 +165,12 @@ int main(int argc, char** argv) {
             input.handleSDLEvent(e, audio_now);
         }
 
-        // --- 场景更新 ---
+        // --- Scene update ---
         if (!scene_stack.empty()) {
             auto& current = scene_stack.back();
             current->handleInput(input.touches(), audio_now);
             current->update(audio_now);
 
-            // 处理场景切换请求
             auto req = current->transitionRequest();
             if (req.type != SceneBase::Transition::NONE) {
                 current->clearTransitionRequest();
@@ -153,15 +179,12 @@ int main(int argc, char** argv) {
                     scene_stack.pop_back();
                     if (!scene_stack.empty()) scene_stack.back()->enter();
                 } else if (req.type == SceneBase::Transition::PUSH || req.type == SceneBase::Transition::REPLACE) {
-                    // PUSH: 前一个 scene exit 后压栈
-                    // REPLACE: 弹出当前 scene 再压栈新 scene
                     if (req.type == SceneBase::Transition::REPLACE) {
                         current->exit();
                         scene_stack.pop_back();
                     } else {
                         current->exit();
                     }
-                    // 根据 target_scene_id 创建新场景
                     switch (static_cast<SceneID>(req.target_scene_id)) {
                         case SceneID::MAIN_MENU:
                             scene_stack.push_back(std::make_unique<SceneMainMenu>());
@@ -194,13 +217,12 @@ int main(int argc, char** argv) {
             }
         }
 #if defined(__ANDROID__)
-        // Android 初步 APK：场景栈为空时自动退出
         if (scene_stack.empty()) {
             running = false;
         }
 #endif
 
-        // --- 渲染 ---
+        // --- Render ---
         int w, h;
         SDL_GetWindowSize(window, &w, &h);
         glViewport(0, 0, w, h);
@@ -214,17 +236,9 @@ int main(int argc, char** argv) {
         batch.endFrame();
 
         SDL_GL_SwapWindow(window);
-
-        // 手动限帧 ~60fps，避免 CPU 占满
-        static uint32_t last_tick = SDL_GetTicks();
-        uint32_t frame_time = SDL_GetTicks() - last_tick;
-        if (frame_time < 16) {
-            SDL_Delay(16 - frame_time);
-        }
-        last_tick = SDL_GetTicks();
     }
 
-    // 7. 清理
+    // 8. Cleanup
     scene_stack.clear();
 #if !defined(__ANDROID__)
     audio.shutdown();

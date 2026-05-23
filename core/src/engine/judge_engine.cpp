@@ -76,8 +76,14 @@ void JudgeEngine::loadChart(const std::vector<NoteData>& notes) {
 void JudgeEngine::update(int64_t audio_now_ms, const std::vector<RawTouch>& touches) {
     frame_results_.clear();
 
-    // 双押合并
+    // 1. 垂直投影（Vertical Judge）：触摸在屏幕下半部时，
+    //    如果 can_project=true 且 x 在 DOWN 区域内，生成一个 y 投影到
+    //    底判线的副本用于 DOWN 判定（副本 can_project=false 防止递归投影）。
+    //    原触摸保留用于 LEFT/RIGHT 判定。
     auto mutable_touches = touches;
+    projectVerticalJudge(mutable_touches);
+
+    // 2. 双押合并
     processChordMerge(mutable_touches);
 
     // 计算"新按下"的手指集合
@@ -306,34 +312,47 @@ void JudgeEngine::processHold(int64_t now_ms, const std::vector<RawTouch>& touch
 }
 
 void JudgeEngine::processChordMerge(std::vector<RawTouch>& touches) {
-    const float left_down_low  = 0.30f - 0.30f * chord_merge_overlap;
-    const float left_down_high = 0.30f + 0.40f * chord_merge_overlap;
-    const float down_right_low  = 0.70f - 0.40f * chord_merge_overlap;
-    const float down_right_high = 0.70f + 0.30f * chord_merge_overlap;
+    // 双押合并（简化版）：vertical judge 已处理了 LEFT-DOWN 和 RIGHT-DOWN 的对映。
+    // 此处只处理 LEFT 和 RIGHT 之间的重叠：当触摸在 LEFT 矩形和 RIGHT 矩形的
+    // 水平重叠区域内（罕见情况，只在窄屏上可能），生成两个虚拟触摸。
+    // 目前大部分情况无需额外处理，保留为空实现。
+    (void)touches;
+}
 
-    std::vector<RawTouch> extras;
-    extras.reserve(touches.size());
+void JudgeEngine::projectVerticalJudge(std::vector<RawTouch>& touches) const {
+    // 垂直投影（Vertical Judge）：当触摸在屏幕下半部（y >= 0.5）且 x 在
+    // DOWN 判定区域内时，生成一个 y 投影到底判线的副本用于 DOWN 判定。
+    // 原触摸的 can_project 设为 false 防止递归投影。
+    //
+    // 投影结果：原触摸保留用于 LEFT/RIGHT 判定，
+    //          新增触摸（y 投影到底判线）用于 DOWN 判定。
+    constexpr float kLeftJudgeX   = 108.0f / 1920.0f;
+    constexpr float kRightJudgeX  = 1812.0f / 1920.0f;
+    constexpr float kBottomJudgeY = 945.0f / 1080.0f;
+    constexpr float kHalfScreenY  = 0.5f;
 
-    for (const auto& t : touches) {
-        if (!t.is_down) {
-            continue;
-        }
+    std::vector<RawTouch> projections;
+    projections.reserve(touches.size());
 
-        if (t.x >= left_down_low && t.x <= left_down_high) {
-            RawTouch copy = t;
-            copy.x = 0.50f;
-            extras.push_back(copy);
-        }
+    for (auto& t : touches) {
+        if (!t.is_down || !t.can_project) continue;
+        if (t.y < kHalfScreenY) continue;           // 上半屏不投影
+        if (t.x < kLeftJudgeX || t.x > kRightJudgeX) continue; // x 不在 DOWN 区域
 
-        if (t.x >= down_right_low && t.x <= down_right_high) {
-            RawTouch copy = t;
-            copy.x = 0.85f;
-            extras.push_back(copy);
-        }
+        // 原触摸 can_project=false，不再参与后续投影
+        t.can_project = false;
+
+        // 生成投影触摸：x 不变（用于 DOWN 水平定位），y 投影到底判线
+        // 使用不同的 finger_id（取负偏移）避免与原始触摸在防糊检查中冲突
+        RawTouch proj = t;
+        proj.finger_id = -t.finger_id - 1;  // 唯一负 ID，不与任何原始 ID 冲突
+        proj.y = kBottomJudgeY;
+        proj.can_project = false;  // 投影触摸不再参与额外投影
+        projections.push_back(proj);
     }
 
-    for (auto& e : extras) {
-        touches.push_back(e);
+    for (auto& p : projections) {
+        touches.push_back(p);
     }
 }
 
@@ -372,17 +391,34 @@ void JudgeEngine::updateStats(JudgeType type) {
 }
 
 bool JudgeEngine::isTouchInSide(const RawTouch& touch, SideType side) const {
-    const float x = touch.x;
+    // Dynamix 真实判定区域（二维矩形，归一化坐标 0.0~1.0）:
+    //   LEFT 判线:  x=108px → 108/1920=0.05625, 判线半宽=24/1920=0.0125
+    //   RIGHT 判线: x=1812px → 1812/1920=0.94375, 判线半宽=24/1920=0.0125
+    //   BOTTOM 判线: y=945px → 945/1080=0.875, 判线半高=24/1080=0.0222
+    //   DOWN 区域: x 在左右判线之间, y 在屏幕下半部(>=0.5)到底判线附近
+    constexpr float kLeftJudgeX   = 108.0f / 1920.0f;
+    constexpr float kRightJudgeX  = 1812.0f / 1920.0f;
+    constexpr float kBottomJudgeY = 945.0f / 1080.0f;
+    constexpr float kHalfWidth    = 24.0f / 1920.0f;
+    constexpr float kHalfHeight   = 24.0f / 1080.0f;
+    constexpr float kHalfScreenY  = 0.5f;
 
     switch (side) {
         case SideType::LEFT:
-            return (x >= 0.0f && x < 0.30f);
+            return (touch.x >= kLeftJudgeX - kHalfWidth &&
+                    touch.x <= kLeftJudgeX + kHalfWidth &&
+                    touch.y >= 0.0f && touch.y <= 1.0f);
 
         case SideType::DOWN:
-            return (x >= 0.30f && x < 0.70f);
+            return (touch.x >= kLeftJudgeX &&
+                    touch.x <= kRightJudgeX &&
+                    touch.y >= kHalfScreenY &&
+                    touch.y <= 1.0f);
 
         case SideType::RIGHT:
-            return (x >= 0.70f && x <= 1.0f);
+            return (touch.x >= kRightJudgeX - kHalfWidth &&
+                    touch.x <= kRightJudgeX + kHalfWidth &&
+                    touch.y >= 0.0f && touch.y <= 1.0f);
 
         default:
             return false;

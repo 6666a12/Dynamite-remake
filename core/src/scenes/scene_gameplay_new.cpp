@@ -16,6 +16,7 @@
 #include "engine/render_batch.h"
 #include "engine/input_manager.h"
 #include "utils/logger.h"
+#include "utils/config_manager.h"
 #include <cmath>
 #include <algorithm>
 #include <unordered_map>
@@ -182,6 +183,22 @@ void SceneGameplay::render(RenderBatch& batch, int64_t audio_now_ms) {
         footer_renderer_ = std::make_unique<FooterRenderer>(renderer_);
     }
 
+    // ---- 计算视口变换（等比例 16:9 缩放 + 居中）----
+    // 从 ConfigManager 读取已知的物理屏幕参数（首次启动时检测，固定不变）
+    {
+        const auto& cfg = ConfigManager::instance();
+        screen_w_ = static_cast<float>(cfg.screenWidth());
+        screen_h_ = static_cast<float>(cfg.screenHeight());
+        const float design_w = static_cast<float>(kDesignW);
+        const float design_h = static_cast<float>(kDesignH);
+        const float scale_x = screen_w_ / design_w;
+        const float scale_y = screen_h_ / design_h;
+        viewport_scale_ = std::min(scale_x, scale_y);
+        viewport_off_x_ = (screen_w_ - design_w * viewport_scale_) * 0.5f;
+        viewport_off_y_ = (screen_h_ - design_h * viewport_scale_) * 0.5f;
+        renderer_->SetViewportTransform(viewport_scale_, viewport_off_x_, viewport_off_y_);
+    }
+
     // ---- 更新变换器（屏幕尺寸可能变化）----
     UpdateTransformer();
 
@@ -194,24 +211,27 @@ void SceneGameplay::render(RenderBatch& batch, int64_t audio_now_ms) {
                          kDesignW, kDesignH);
 
     // 2. 轨道遮罩（三条判定线背景区域）
-    // 沿用旧版 drawTracks 逻辑绘制半透明轨道底
+    // Dynamix 实际布局：
+    //   DOWN 区域: x=[108,1812], y=[0,945]（底判线以上全部区域）
+    //   LEFT 区域: x=[0,108], y=[0,945]（左判线左侧区域）
+    //   RIGHT 区域: x=[1812,1920], y=[0,945]（右判线右侧区域）
     {
-        const float side_w = static_cast<float>(kDesignW) * 0.25f;
-        const float bottom_bar = static_cast<float>(kDesignH) * 0.12f;
-        const float judge_y = static_cast<float>(kDesignH) - bottom_bar;
+        constexpr float kLeftJudgeX   = static_cast<float>(kDesignW) * 0.05625f;
+        constexpr float kRightJudgeX  = static_cast<float>(kDesignW) * 0.94375f;
+        constexpr float kBottomJudgeY = static_cast<float>(kDesignH) * 0.875f;
         const uint32_t track_bg = PackColor(35, 35, 35, 200);
         const uint32_t border = PackColor(255, 215, 0, 120);
 
-        // 左轨道
-        renderer_->DrawRect(0.0f, 0.0f, side_w, kDesignH, track_bg);
-        renderer_->DrawRect(0.0f, 0.0f, 1.0f, kDesignH, border);
-        // 右轨道
-        renderer_->DrawRect(kDesignW - side_w, 0.0f, side_w, kDesignH, track_bg);
-        renderer_->DrawRect(kDesignW - 1.0f, 0.0f, 1.0f, kDesignH, border);
-        // 下轨道
-        renderer_->DrawRect(side_w, 0.0f, kDesignW - 2.0f * side_w, judge_y, track_bg);
-        renderer_->DrawRect(side_w, 0.0f, 1.0f, judge_y, border);
-        renderer_->DrawRect(kDesignW - side_w - 1.0f, 0.0f, 1.0f, judge_y, border);
+        // DOWN 区域 (中央大区域)
+        renderer_->DrawRect(kLeftJudgeX, 0.0f, kRightJudgeX - kLeftJudgeX, kBottomJudgeY, track_bg);
+        renderer_->DrawRect(kLeftJudgeX, 0.0f, 2.0f, kBottomJudgeY, border);
+        renderer_->DrawRect(kRightJudgeX - 2.0f, 0.0f, 2.0f, kBottomJudgeY, border);
+        // LEFT 区域 (左判线左侧)
+        renderer_->DrawRect(0.0f, 0.0f, kLeftJudgeX, kBottomJudgeY, track_bg);
+        renderer_->DrawRect(kLeftJudgeX, 0.0f, 2.0f, kBottomJudgeY, border);
+        // RIGHT 区域 (右判线右侧)
+        renderer_->DrawRect(kRightJudgeX, 0.0f, static_cast<float>(kDesignW) - kRightJudgeX, kBottomJudgeY, track_bg);
+        renderer_->DrawRect(kRightJudgeX - 2.0f, 0.0f, 2.0f, kBottomJudgeY, border);
     }
 
     // 3. Note 层（按 distance 从大到小排序，远的先画）
@@ -338,21 +358,26 @@ void SceneGameplay::BuildRenderFrame(int64_t audio_now_ms) {
         cmd.scale = 1.0f;
 
         // 计算局部坐标 (lane_pos, distance)
-        const float side_w = static_cast<float>(kDesignW) * 0.25f;
-        const float bottom_bar = static_cast<float>(kDesignH) * 0.12f;
-        const float judge_y = static_cast<float>(kDesignH) - bottom_bar;
-        const float lane_center_y = judge_y * 0.45f;
+        // Dynamix 实际布局 (1920x1080):
+        //   LEFT 判线: x=108, RIGHT 判线: x=1812, BOTTOM 判线: y=945
+        //   DOWN: position -> 水平偏移, distance -> 离判线的垂直距离 (从上往下落)
+        //   LEFT: position -> 垂直偏移, distance -> 离判线的水平距离 (从右向左飞)
+        //   RIGHT: position -> 垂直偏移, distance -> 离判线的水平距离 (从左向右飞)
+        constexpr float kBottomJudgeY = static_cast<float>(kDesignH) * 0.875f;  // 945
+        constexpr float kLaneCenterY  = kBottomJudgeY * 0.5f;
+        constexpr float kTrackWidth   = static_cast<float>(kDesignW) * 0.8875f; // 1812-108=1704
+        constexpr float kTrackHeight  = kBottomJudgeY;                          // 945
 
         if (note.side == SideType::DOWN) {
-            // DOWN: lane_pos = 水平偏移, distance = 离判定线的垂直距离
-            cmd.lane_pos = (note.position - 0.5f) * side_w * 0.8f;
-            cmd.distance = dist;
+            // DOWN: 从上往下落, position=0 在左, position=1 在右
+            cmd.lane_pos = (note.position - 0.5f) * kTrackWidth * 0.8f;
+            cmd.distance = dist;  // distance=0 在判线, 越大离判线越远 (向上)
             cmd.front_width = GameplayUI::NOTE_WIDTH_BASE;
             cmd.front_thickness = GameplayUI::NOTE_THICKNESS_BASE;
         } else {
-            // LEFT/RIGHT: lane_pos = 垂直偏移, distance = 离判定线的水平距离
-            cmd.lane_pos = (note.position - 0.5f) * judge_y * 0.6f;
-            cmd.distance = dist;
+            // LEFT/RIGHT: position=0 在下, position=1 在上
+            cmd.lane_pos = (note.position - 0.5f) * kTrackHeight * 0.6f;
+            cmd.distance = dist;  // distance=0 在判线, 越大离判线越远 (向两侧)
             cmd.front_width = GameplayUI::NOTE_WIDTH_BASE * GameplayUI::SIDE_WIDTH_SCALE;
             cmd.front_thickness = GameplayUI::NOTE_THICKNESS_BASE;
         }
@@ -435,14 +460,19 @@ void SceneGameplay::BuildRenderFrame(int64_t audio_now_ms) {
 // ============================================================
 
 void SceneGameplay::UpdateTransformer() {
-    const float side_w = static_cast<float>(kDesignW) * 0.25f;
-    const float bottom_bar = static_cast<float>(kDesignH) * 0.12f;
-    const float judge_y = static_cast<float>(kDesignH) - bottom_bar;
+    // Dynamix 真实布局 (1920x1080 设计分辨率):
+    //   LEFT 判线: x = 108 (距左 5.625%)
+    //   RIGHT 判线: x = 1812 (距右 5.625%)
+    //   BOTTOM 判线: y = 945 (距底 12.5%)
+    //   左/右判线从底判线延伸到屏幕顶部
+    constexpr float kLeftJudgeX   = static_cast<float>(kDesignW) * 0.05625f;  // 108
+    constexpr float kRightJudgeX  = static_cast<float>(kDesignW) * 0.94375f; // 1812
+    constexpr float kBottomJudgeY = static_cast<float>(kDesignH) * 0.875f;   // 945
 
-    transformer_.bottom_judge_y = judge_y;
-    transformer_.left_judge_x = side_w;
-    transformer_.right_judge_x = static_cast<float>(kDesignW) - side_w;
-    transformer_.lane_center_y = judge_y * 0.45f;
+    transformer_.bottom_judge_y = kBottomJudgeY;
+    transformer_.left_judge_x = kLeftJudgeX;
+    transformer_.right_judge_x = kRightJudgeX;
+    transformer_.lane_center_y = kBottomJudgeY * 0.5f;  // 侧轨道沿判线的中心 Y
     transformer_.bottom_center_x = static_cast<float>(kDesignW) * 0.5f;
 }
 
@@ -451,8 +481,9 @@ float SceneGameplay::CalcApproachTimeMs() const {
 }
 
 float SceneGameplay::CalcFallRange() const {
-    const float bottom_bar = static_cast<float>(kDesignH) * 0.12f;
-    return static_cast<float>(kDesignH) - bottom_bar;
+    // 下落范围 = 从底判线到屏幕顶部的距离（DOWN 向上飞范围）
+    // 同时也是 LEFT/RIGHT 从判线到屏幕边缘的水平距离
+    return static_cast<float>(kDesignH) * 0.875f;  // 945px
 }
 
 // ============================================================
@@ -462,20 +493,14 @@ float SceneGameplay::CalcFallRange() const {
 void SceneGameplay::SpawnHitEffect(SideType side, JudgeType type,
                                     NoteType note_type,
                                     int screen_w, int screen_h) {
-    const float side_w = static_cast<float>(screen_w) * 0.25f;
-    const float bottom_bar = static_cast<float>(screen_h) * 0.12f;
-    const float judge_y = static_cast<float>(screen_h) - bottom_bar;
+    constexpr float kBottomJudgeY = 945.0f;
+    constexpr float kLeftJudgeX   = 108.0f;
+    constexpr float kRightJudgeX  = 1812.0f;
+    constexpr float kLaneCenterY  = 945.0f * 0.5f;
+    constexpr float kEffectWidth  = 60.0f;
 
     HitEffect eff{};
-    switch (note_type) {
-        case NoteType::TAP:
-        case NoteType::MULTI:    eff.width = side_w * 0.45f; break;
-        case NoteType::SLIDE:    eff.width = side_w * 0.50f; break;
-        case NoteType::HOLD_HEAD:
-        case NoteType::HOLD_BODY:
-        case NoteType::HOLD_TAIL: eff.width = side_w * 0.35f; break;
-        default:                 eff.width = side_w * 0.4f; break;
-    }
+    eff.width = kEffectWidth;
     eff.height = 8.0f;
     eff.max_lifetime = 0.12f;
     eff.lifetime = eff.max_lifetime;
@@ -489,16 +514,16 @@ void SceneGameplay::SpawnHitEffect(SideType side, JudgeType type,
 
     switch (side) {
         case SideType::LEFT:
-            eff.x = side_w - eff.width * 0.5f;
-            eff.y = judge_y * 0.45f - eff.height * 0.5f;
+            eff.x = kLeftJudgeX - eff.width * 0.5f;
+            eff.y = kLaneCenterY - eff.height * 0.5f;
             break;
         case SideType::DOWN:
             eff.x = static_cast<float>(screen_w) * 0.5f - eff.width * 0.5f;
-            eff.y = judge_y - eff.height * 0.5f;
+            eff.y = kBottomJudgeY - eff.height * 0.5f;
             break;
         case SideType::RIGHT:
-            eff.x = static_cast<float>(screen_w) - side_w - eff.width * 0.5f;
-            eff.y = judge_y * 0.45f - eff.height * 0.5f;
+            eff.x = kRightJudgeX - eff.width * 0.5f;
+            eff.y = kLaneCenterY - eff.height * 0.5f;
             break;
     }
 
@@ -523,9 +548,46 @@ void SceneGameplay::UpdateHitEffects(float dt) {
 void SceneGameplay::handleInput(const std::vector<RawTouch>& touches,
                                  int64_t audio_now_ms) {
     (void)audio_now_ms;
-    s_current_touches = touches;
+    
+    // 将物理触摸坐标映射回 16:9 逻辑坐标
+    // 等比例缩放 + 居中的逆变换：
+    //   逻辑_x = (物理_x * screen_w - offset_x) / (design_w * scale)
+    //   如果逻辑坐标不在 [0, 1] 范围内，说明触摸在黑边区域，忽略。
+    const float design_w = static_cast<float>(kDesignW);
+    const float design_h = static_cast<float>(kDesignH);
+    
+    s_current_touches.clear();
+    s_current_touches.reserve(touches.size());
 
     for (const auto& t : touches) {
+        RawTouch mapped = t;
+        
+        // 逆映射：物理归一化坐标 → 16:9 逻辑归一化坐标
+        // 物理坐标 (tx, ty) 对应物理像素 (tx * screen_w, ty * screen_h)
+        // 在 viewport 区域内的 16:9 逻辑坐标：
+        //   logic_x = (物理_x)  // 因为物理 x 是 0~1，直接对应 16:9 区域的 x 比例
+        // 更精确：
+        float phys_px_x = t.x * screen_w_;
+        float phys_px_y = t.y * screen_h_;
+        
+        // 减去 viewport 偏移，转换到 viewport 坐标系
+        float vp_x = (phys_px_x - viewport_off_x_) / viewport_scale_;
+        float vp_y = (phys_px_y - viewport_off_y_) / viewport_scale_;
+        
+        // 归一化到 [0, 1]
+        mapped.x = vp_x / design_w;
+        mapped.y = vp_y / design_h;
+        
+        // 黑边区域忽略
+        if (mapped.x < 0.0f || mapped.x > 1.0f ||
+            mapped.y < 0.0f || mapped.y > 1.0f) {
+            continue;
+        }
+        
+        s_current_touches.push_back(mapped);
+    }
+
+    for (const auto& t : s_current_touches) {
         if (t.is_new && t.is_down) {
             if (t.x < 0.1f && t.y < 0.1f) {
                 transition_request_.type = Transition::POP;

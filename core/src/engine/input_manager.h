@@ -21,6 +21,7 @@ struct RawTouch {
     int64_t timestamp_ms;// 事件时间戳（由上层在 SDL 回调中标记为 audio_clock.nowMs()）
     bool    is_down;     // true = 按下/移动中，false = 抬起
     bool    is_new;      // 本帧新按下
+    bool    can_project = true; // 是否允许垂直投影（用于 vertical judge 机制）
 };
 
 class InputManager {

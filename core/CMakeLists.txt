@@ -84,6 +84,9 @@ file(GLOB GAMEPLAY_SOURCES
 ) 
 list(APPEND ENGINE_SOURCES ${GAMEPLAY_SOURCES})
 
+# 排除旧版 scene_gameplay.cpp（ODR 冲突避免）
+list(FILTER ENGINE_SOURCES EXCLUDE REGEX "scene_gameplay\\.cpp$")
+
 # 平台桥接文件选择：只保留当前平台的实现
 if(ANDROID)
     list(FILTER ENGINE_SOURCES EXCLUDE REGEX "go_bridge_desktop\\.cpp$")
