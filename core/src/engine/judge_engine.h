@@ -94,9 +94,13 @@ private:
     std::unordered_set<int64_t> held_fingers_;
 
     JudgeType judgeTiming(int64_t delta_ms) const;
+    /// SLIDE 专用判定：early 只有 perfect（|delta| <= window_perfect），
+    /// late: +window_perfect ~ +window_good 为 GOOD，其余为 MISS
+    JudgeType judgeSlideTiming(int64_t delta_ms) const;
     void processHold(int64_t now_ms, const std::vector<struct RawTouch>& touches);
     void processChordMerge(std::vector<struct RawTouch>& touches);
     void projectVerticalJudge(std::vector<struct RawTouch>& touches) const;
     void updateStats(JudgeType type);
     bool isTouchInSide(const RawTouch& touch, SideType side) const;
 };
+

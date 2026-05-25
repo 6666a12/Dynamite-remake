@@ -7,8 +7,9 @@
  * 2. 所有数组访问做边界检查
  * 3. 使用智能指针、RAII，禁止裸 new/delete
  *
- * 判定规则：
- * - 三级判定：Perfect（±25ms）/ Good（±55ms）/ Miss（>150ms 自动 Miss）
+  * 判定规则（Dynamite 标准）：
+ * - 三级判定：Perfect（±59ms）/ Good（±90ms）/ Miss（>150ms 自动 Miss）
+ * - 触摸匹配只到 ±90ms，超过直接等 Auto Miss
  * - 长条(Hold)：头判+尾判，头判 Miss 则整根长条淡出
  *             按住过程中允许松开 500ms 内不断连
  * - 双押合并：相邻侧判定区域重叠 30%，点击中间区域可同时判定两侧
@@ -112,10 +113,10 @@ void JudgeEngine::update(int64_t audio_now_ms, const std::vector<RawTouch>& touc
     };
     std::vector<JudgeCandidate> candidates;
 
-    // 追踪每个触控首次匹配的 note 时间，防止糊到不同时的 note
+        // 追踪每个触控首次匹配的 note 时间，防止糊到不同时的 note
     std::unordered_map<int64_t, int64_t> touch_first_matched_time;
 
-    // 遍历所有活跃 note 进行头判（note 优先）
+    // 遍历所有活跃 note 进行判定（note 优先）
     for (size_t idx = 0; idx < active_notes_.size(); ++idx) {
         auto& an = active_notes_[idx];
         if (an.judged) {
@@ -125,8 +126,7 @@ void JudgeEngine::update(int64_t audio_now_ms, const std::vector<RawTouch>& touc
             continue;
         }
 
-        // Auto Miss 检测
-        // Auto Miss 检测
+        // ---- Auto Miss 检测（所有类型通用）----
         if (audio_now_ms > an.time_ms + window_miss) {
             an.judged = true;
             frame_results_.push_back({
@@ -153,10 +153,64 @@ void JudgeEngine::update(int64_t audio_now_ms, const std::vector<RawTouch>& touc
             }
             continue;
         }
-        // 触摸匹配
+
+        // ============================================================
+        // SLIDE 判定分支（融入主循环但使用独立的判定逻辑）
+        // ============================================================
+        if (an.type == static_cast<uint32_t>(NoteType::SLIDE)) {
+            for (const auto& touch : mutable_touches) {
+                if (!touch.is_down) continue;
+                if (!isTouchInSide(touch, an.side)) continue;
+
+                const int64_t delta_ms = audio_now_ms - an.time_ms;
+
+                // SLIDE 判定：early 方向只有 perfect（|delta| <= window_perfect）
+                // 即 delta < -window_perfect 时不触发任何判定
+                if (delta_ms < -window_perfect) continue;
+
+                // delta 在可判窗口内 [-window_perfect, +window_good]
+                if (delta_ms <= window_good) {
+                    const JudgeType jt = judgeSlideTiming(delta_ms);
+                    an.judged = true;
+
+                    // 判断是否为 Catch-SLIDE（点击判定）
+                    // 条件：手指是新按下的（new_finger）+ 且按下时 delta >= -window_perfect
+                    bool is_new_finger = (new_fingers.find(touch.finger_id) != new_fingers.end());
+                    bool is_catch = is_new_finger && (delta_ms >= -window_perfect);
+
+                    if (is_catch) {
+                        // Catch-SLIDE：入 candidates，参与防糊
+                        // 记录触控首次匹配时间（防糊：一个触控只能判同一个 time_ms 的 notes）
+                        auto it = touch_first_matched_time.find(touch.finger_id);
+                        if (it != touch_first_matched_time.end()) {
+                            if (it->second != an.time_ms) {
+                                // 该触控已匹配不同时的 note，跳过
+                                an.judged = false; // 撤销标记
+                                continue;
+                            }
+                        } else {
+                            touch_first_matched_time[touch.finger_id] = an.time_ms;
+                        }
+                        candidates.push_back({idx, jt, delta_ms, audio_now_ms, false});
+                    } else {
+                        // Swipe-SLIDE：直接判，不经过 candidates（不参与防糊）
+                        frame_results_.push_back({
+                            jt, delta_ms, an.id, an.side, audio_now_ms, false
+                        });
+                        updateStats(jt);
+                    }
+                    break; // 一个 note 只判定一次
+                }
+            }
+            continue; // SLIDE 处理完毕，跳到下一个 note
+        }
+
+        // ============================================================
+        // TAP / HOLD_HEAD / HOLD_TAIL / MULTI 判定（原逻辑）
+        // ============================================================
+        // 触摸匹配：跳过 SLIDE（已在上面处理）
         if (an.type != static_cast<uint32_t>(NoteType::TAP) &&
             an.type != static_cast<uint32_t>(NoteType::HOLD_HEAD) &&
-            an.type != static_cast<uint32_t>(NoteType::SLIDE) &&
             an.type != static_cast<uint32_t>(NoteType::MULTI) &&
             an.type != static_cast<uint32_t>(NoteType::HOLD_TAIL)) {
             continue;
@@ -182,10 +236,11 @@ void JudgeEngine::update(int64_t audio_now_ms, const std::vector<RawTouch>& touc
                 // 时间相同，允许继续匹配
             }
 
-            const int64_t delta_ms = audio_now_ms - an.time_ms;
+                        const int64_t delta_ms = audio_now_ms - an.time_ms;
             const int64_t abs_delta = std::llabs(delta_ms);
 
-            if (abs_delta <= window_miss) {
+            // Dynamite 标准：触摸只匹配到 ±90ms，超过直接等 Auto Miss
+            if (abs_delta <= window_good) {
                 const JudgeType jt = judgeTiming(delta_ms);
                 an.judged = true;
                 candidates.push_back({idx, jt, delta_ms, audio_now_ms, false});
@@ -255,6 +310,20 @@ JudgeType JudgeEngine::judgeTiming(int64_t delta_ms) const {
         return JudgeType::PERFECT;
     }
     if (abs_delta <= window_good) {
+        return JudgeType::GOOD;
+    }
+    return JudgeType::MISS;
+}
+
+JudgeType JudgeEngine::judgeSlideTiming(int64_t delta_ms) const {
+    // SLIDE 判定窗口：
+    //   |delta| <= window_perfect（±25ms）→ PERFECT（含 early perfect）
+    //   +window_perfect < delta <= +window_good（+25~+55ms）→ Late GOOD
+    //   其他 → MISS（delta < -25ms 不在判定触发范围内，但这里只做窗口判断）
+    if (std::llabs(delta_ms) <= window_perfect) {
+        return JudgeType::PERFECT;
+    }
+    if (delta_ms > 0 && delta_ms <= window_good) {
         return JudgeType::GOOD;
     }
     return JudgeType::MISS;
