@@ -50,16 +50,15 @@ struct HoldState {
 
 class JudgeEngine {
 public:
-    // 判定窗口（毫秒），从 config 读取，可动态调整
-    int32_t window_perfect = 25;  // ±25ms
-    int32_t window_good    = 55;  // ±55ms
-    int32_t window_miss    = 150; // >150ms 自动 Miss
+    // 判定窗口（毫秒），Dynamite 标准，可从 config 动态调整
+        int32_t window_perfect = 59;  // ±59ms  Perfect
+        int32_t window_good    = 90;  // ±90ms  Good（触摸匹配上限）
+        int32_t window_miss    = 150; // >150ms 自动 Miss
 
     // 长条容错：允许松开 500ms 内不断连
     int32_t hold_break_tolerance_ms = 500;
 
-    // 双押合并：相邻轨道判定区域重叠 30% 时，点击中间区域可同时判定
-    float chord_merge_overlap = 0.30f;
+    
 
     // 初始化谱面
     void loadChart(const std::vector<struct NoteData>& notes);
@@ -94,11 +93,11 @@ private:
     std::unordered_set<int64_t> held_fingers_;
 
     JudgeType judgeTiming(int64_t delta_ms) const;
-    /// SLIDE 专用判定：early 只有 perfect（|delta| <= window_perfect），
-    /// late: +window_perfect ~ +window_good 为 GOOD，其余为 MISS
+    /// SLIDE 专用判定：early perfect（|delta| <= window_perfect=±59ms），
+        /// late GOOD（+59ms < delta <= +90ms），其余不触發或 MISS
+        /// 注意：delta < -59ms（太早按下）不触发任何判定，等待后续 Swipe
     JudgeType judgeSlideTiming(int64_t delta_ms) const;
     void processHold(int64_t now_ms, const std::vector<struct RawTouch>& touches);
-    void processChordMerge(std::vector<struct RawTouch>& touches);
     void projectVerticalJudge(std::vector<struct RawTouch>& touches) const;
     void updateStats(JudgeType type);
     bool isTouchInSide(const RawTouch& touch, SideType side) const;

@@ -14,6 +14,8 @@
  */
 class AudioEngine {
 public:
+    ~AudioEngine() { shutdown(); }
+
     bool init(int sample_rate = 44100, int channels = 2, int buffer_frames = 128);
     void shutdown();
 

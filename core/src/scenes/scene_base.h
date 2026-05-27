@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <cstdint>
+#include <SDL3/SDL.h>
 
 // 前向声明
 struct RawTouch;
@@ -25,6 +26,13 @@ public:
 
     // 输入处理
     virtual void handleInput(const std::vector<RawTouch>& touches, int64_t audio_now_ms) {}
+
+    // 当前时间基准（默认用系统时钟，Gameplay 场景用音频时钟覆盖）
+    virtual int64_t currentTimeMs() const { return static_cast<int64_t>(SDL_GetTicks()); }
+
+    // 应用前后台切换（仅 Gameplay 场景需要暂停/恢复音频）
+    virtual void onPause() {}
+    virtual void onResume() {}
 
     // 场景切换请求
     enum class Transition { NONE, PUSH, POP, REPLACE };

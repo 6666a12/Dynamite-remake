@@ -58,7 +58,7 @@ public:
 class RenderBatchRenderer : public IRenderer {
 public:
     explicit RenderBatchRenderer(RenderBatch& batch)
-        : batch_(batch) {}
+        : batch_(&batch) {}
 
     void SetViewportTransform(float scale, float offset_x, float offset_y) override {
         scale_ = scale;
@@ -83,8 +83,9 @@ public:
     const Texture* GetNoteHoldTailTex() const override;
     const Texture* GetNoteHoldZeroTex() const override;
     const Texture* GetNoteSlideTex() const override;
+    const Texture* GetEffectTex(const std::string& name, int index) const override;
 private:
-    RenderBatch& batch_;
+    RenderBatch* batch_ = nullptr;  // 非拥有，生命周期由 main() 保证
     float scale_ = 1.0f;
     float offset_x_ = 0.0f;
     float offset_y_ = 0.0f;

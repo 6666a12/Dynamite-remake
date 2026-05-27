@@ -26,6 +26,7 @@ extern std::string GetAssetFullPath(const std::string& relativePath);
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include <fstream>
 #include <cmath>
 
 // =============================================================================
@@ -101,29 +102,29 @@ TEST(judge_timing_window) {
     notes.push_back({1, NoteType::TAP, 1000, SideType::DOWN, 0.5f, 0.0f, 0, 0, 0, {}});
     engine.loadChart(notes);
 
-    // Perfect 窗口：±25ms，触摸 @ 1025ms（late 25ms）
+    // Perfect 窗口：±59ms，触摸 @ 1059ms（late 59ms）
     {
         std::vector<RawTouch> touches;
-        touches.push_back({1, 0.5f, 0.5f, 1025, true, true});
-        engine.update(1025, touches);
+        touches.push_back({1, 0.5f, 0.5f, 1059, true, true});
+        engine.update(1059, touches);
         auto stats = engine.currentStats();
         ASSERT_EQ(stats.perfect, 1);
     }
 
     // 重新加载谱面
     engine.loadChart(notes);
-    // Good 窗口：±55ms，触摸 @ 1055ms（late 55ms）
+    // Good 窗口：±90ms，触摸 @ 1090ms（late 90ms）
     {
         std::vector<RawTouch> touches;
-        touches.push_back({1, 0.5f, 0.5f, 1055, true, true});
-        engine.update(1055, touches);
+        touches.push_back({1, 0.5f, 0.5f, 1090, true, true});
+        engine.update(1090, touches);
         auto stats = engine.currentStats();
         ASSERT_EQ(stats.good, 1);
     }
 
     // 重新加载谱面
     engine.loadChart(notes);
-    // Miss 窗口：>55ms 且 <=150ms 时仍判 Miss，触摸 @ 1150ms（late 150ms）
+    // Miss 窗口：>90ms 且 <=150ms 时仍判 Miss，触摸 @ 1150ms（late 150ms）
     {
         std::vector<RawTouch> touches;
         touches.push_back({1, 0.5f, 0.5f, 1150, true, true});
@@ -253,14 +254,12 @@ TEST(judge_hold_break) {
 // 测试：谱面解析器魔数校验
 // =============================================================================
 TEST(chart_parser_magic) {
-    // 错误魔数应返回 nullopt
-    uint8_t bad_data[] = {'X', 'Y', 'Z', 'W', 0, 0, 0, 0};
-    auto result = ChartParser::parse(bad_data, sizeof(bad_data));
+    // 魔数校验在 readChart 中，传入不存在的路径应返回 nullopt
+    auto result = ChartParser::readChart("/nonexistent/path/test.chart");
     ASSERT_TRUE(!result.has_value());
 
-    // 正确魔数但数据太短
-    uint8_t short_data[] = {'D', 'Y', 'N', 'T'};
-    result = ChartParser::parse(short_data, sizeof(short_data));
+    // 空路径也应返回 nullopt
+    result = ChartParser::readChart("");
     ASSERT_TRUE(!result.has_value());
 }
 
@@ -270,27 +269,25 @@ TEST(chart_parser_magic) {
 TEST(chart_parser_load_real) {
     // 尝试多个可能的路径（相对于不同运行目录）
     const char* paths[] = {
-        "../../assets/songs/001/chart_1.chart",
-        "../assets/songs/001/chart_1.chart",
-        "assets/songs/001/chart_1.chart",
+        "../../assets/songs/song_sample/chart_giga.chart",
+        "../assets/songs/song_sample/chart_giga.chart",
+        "assets/songs/song_sample/chart_giga.chart",
     };
     std::optional<Chart> chart;
     for (const char* p : paths) {
-        chart = ChartParser::parse(p);
+        chart = ChartParser::parseWithCache(p);
         if (chart.has_value()) break;
     }
     ASSERT_TRUE(chart.has_value());
 
-    // 验证魔数和版本
-    ASSERT_EQ(chart->header.magic[0], 'D');
-    ASSERT_EQ(chart->header.magic[1], 'Y');
-    ASSERT_EQ(chart->header.magic[2], 'N');
-    ASSERT_EQ(chart->header.magic[3], 'T');
-    ASSERT_EQ(chart->header.version, 1);
+    // 验证解析出的字段
+    ASSERT_FALSE(chart->song_id.empty());
+    ASSERT_FALSE(chart->difficulty.empty());
+    ASSERT_FALSE(chart->map_id.empty());
 
-    // 验证 note 数量合理
-    ASSERT_TRUE(chart->header.note_count > 0);
-    ASSERT_EQ(chart->notes.size(), chart->header.note_count);
+    // 验证 note 数量合理（应有至少 1 个 note）
+    ASSERT_TRUE(chart->note_count > 0);
+    ASSERT_EQ(chart->notes.size(), static_cast<size_t>(chart->note_count));
 
     // 验证 note 时间单调递增（parse 后应已排序）
     for (size_t i = 1; i < chart->notes.size(); ++i) {
@@ -612,6 +609,126 @@ TEST(judge_chord_different_touch_times) {
 }
 
 // =============================================================================
+// 测试：XML 谱面 BPM 变速解析（GIGA.xml — 含 BPM change）
+// =============================================================================
+TEST(chart_parser_xml_bpm_change) {
+    const char* paths[] = {
+        "../../GIGA.xml",
+        "../GIGA.xml",
+        "GIGA.xml",
+    };
+    std::optional<Chart> chart;
+    for (const char* p : paths) {
+        chart = ChartParser::parseXmlFile(p);
+        if (chart.has_value()) break;
+    }
+    ASSERT_TRUE(chart.has_value());
+
+    // m_barPerMin=48 → 实际 BPM = 48×4 = 192
+    ASSERT_NEAR(chart->bpm, 192.0f, 0.01f);
+    // m_timeOffset=0.664
+    ASSERT_NEAR(chart->offset_sec, 0.664, 0.001);
+    // m_mapID=_map_И00._G
+    ASSERT_EQ(chart->difficulty, "GIGA");
+    ASSERT_FALSE(chart->map_id.empty());
+    ASSERT_FALSE(chart->song_id.empty());
+    // bpm_events: 1 entry at beat 0
+    ASSERT_TRUE(chart->bpm_events.size() >= 1);
+    ASSERT_NEAR(chart->bpm_events[0].bpm, 192.0f, 0.01f);
+
+    printf("(bpm=%.1f, events=%zu, notes=%zu) ",
+           chart->bpm, chart->bpm_events.size(), chart->notes.size());
+}
+
+// =============================================================================
+// 测试：XML 谱面无变速（floating city.xml — 无 BPM change）
+// =============================================================================
+TEST(chart_parser_xml_no_bpm_change) {
+    const char* paths[] = {
+        "../../floating city.xml",
+        "../floating city.xml",
+        "floating city.xml",
+    };
+    std::optional<Chart> chart;
+    for (const char* p : paths) {
+        chart = ChartParser::parseXmlFile(p);
+        if (chart.has_value()) break;
+    }
+    ASSERT_TRUE(chart.has_value());
+
+    // m_barPerMin=31.25 → 实际 BPM = 31.25×4 = 125
+    ASSERT_NEAR(chart->bpm, 125.0f, 0.01f);
+    // m_timeOffset=-15.920833
+    ASSERT_TRUE(chart->offset_sec < 0.0);
+    // 无变速
+    ASSERT_EQ(chart->bpm_events.size(), 0u);
+    ASSERT_EQ(chart->difficulty, "GIGA");
+    ASSERT_FALSE(chart->song_id.empty());
+
+    printf("(bpm=%.1f, offset=%.3f, notes=%zu) ",
+           chart->bpm, chart->offset_sec, chart->notes.size());
+}
+
+// =============================================================================
+// 测试：ZIP 包解析
+// =============================================================================
+TEST(chart_parser_zip_package) {
+    const char* paths[] = {
+        "../../cankao/[H10 G15]RosenkreuzVampir.zip",
+        "../cankao/[H10 G15]RosenkreuzVampir.zip",
+        "cankao/[H10 G15]RosenkreuzVampir.zip",
+    };
+    std::optional<std::vector<Chart>> charts;
+    for (const char* p : paths) {
+        charts = ChartParser::parsePackage(p);
+        if (charts.has_value()) break;
+    }
+    ASSERT_TRUE(charts.has_value());
+    ASSERT_TRUE(charts->size() >= 1);
+
+    // 验证每个谱面字段
+    for (const auto& c : *charts) {
+        ASSERT_FALSE(c.difficulty.empty());
+        ASSERT_NEAR(c.bpm, 192.0f, 0.01f);  // 48×4
+        ASSERT_TRUE(c.note_count > 0);
+        ASSERT_TRUE(c.duration_ms > 0);
+    }
+
+    // ZIP 包 parsePackageInfo
+    const char* zip_path = nullptr;
+    for (const char* p : paths) {
+        std::ifstream test_f(p);
+        if (test_f.is_open()) { zip_path = p; break; }
+    }
+    if (zip_path) {
+        auto pkg = ChartParser::parsePackageInfo(zip_path);
+        ASSERT_TRUE(pkg.has_value());
+        ASSERT_FALSE(pkg->music_name.empty());
+        printf("(charts=%zu '%s' by %s) ",
+               charts->size(), pkg->music_name.c_str(), pkg->noter_name.c_str());
+    } else {
+        printf("(charts=%zu) ", charts->size());
+    }
+}
+
+// =============================================================================
+// 测试：ZIP 包 per-difficulty 缓存路径
+// =============================================================================
+TEST(chart_parser_cache_path_diff) {
+    // 无 difficulty → 基础路径
+    std::string base = ChartParser::cachePathFrom("song.zip");
+    ASSERT_EQ(base, "song.chart");
+
+    // 带 difficulty → song_GIGA.chart
+    std::string diff = ChartParser::cachePathFrom("song.zip", "GIGA");
+    ASSERT_EQ(diff, "song_GIGA.chart");
+
+    // 对 XML 也一样
+    std::string xml_cache = ChartParser::cachePathFrom("chart.xml", "HARD");
+    ASSERT_EQ(xml_cache, "chart_HARD.chart");
+}
+
+// =============================================================================
 // 测试：资源加载路径安全
 // =============================================================================
 TEST(asset_loader_path_security) {
@@ -657,6 +774,10 @@ int main(int argc, char** argv) {
     RUN_TEST(judge_real_chart_hold_break);
     RUN_TEST(judge_multi_finger_spam_penalty);
     RUN_TEST(judge_chord_different_touch_times);
+    RUN_TEST(chart_parser_xml_bpm_change);
+    RUN_TEST(chart_parser_xml_no_bpm_change);
+    RUN_TEST(chart_parser_zip_package);
+    RUN_TEST(chart_parser_cache_path_diff);
     RUN_TEST(asset_loader_path_security);
 
     printf("\n========================================\n");

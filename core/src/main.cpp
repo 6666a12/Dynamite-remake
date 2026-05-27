@@ -20,8 +20,6 @@
 #include <memory>
 #include <vector>
 
-#include "engine/audio_engine.h"
-#include "engine/judge_engine.h"
 #include "engine/input_manager.h"
 #include "engine/render_batch.h"
 #include "engine/chart_parser.h"
@@ -100,14 +98,6 @@ int main(int argc, char** argv) {
     batch.init();
 
     InputManager input;
-    JudgeEngine judge;
-
-#if !defined(__ANDROID__)
-    AudioEngine audio;
-    if (!audio.init(44100, 2, 128)) {
-        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "AudioEngine init failed, running without audio");
-    }
-#endif
 
     // 5. Init Go DataLayer (desktop mock)
     GoBridge::init("./game.db");
@@ -141,12 +131,10 @@ int main(int argc, char** argv) {
     // 7. Main loop
     bool running = true;
     while (running) {
-        // Audio clock as single time base
-#if defined(__ANDROID__)
-        int64_t audio_now = static_cast<int64_t>(gameplay_scene->audioClock().nowMs());
-#else
-        int64_t audio_now = static_cast<int64_t>(audio.clock().nowMs());
-#endif
+        // 时间基准：Gameplay 场景用音频时钟，其他场景用系统时钟
+        int64_t audio_now = scene_stack.empty()
+            ? static_cast<int64_t>(SDL_GetTicks())
+            : scene_stack.back()->currentTimeMs();
 
         // --- Input collection ---
         SDL_Event e;
@@ -156,10 +144,10 @@ int main(int argc, char** argv) {
             }
 #if defined(__ANDROID__)
             if (e.type == SDL_EVENT_DID_ENTER_BACKGROUND) {
-                gameplay_scene->pauseAudio();
+                if (!scene_stack.empty()) scene_stack.back()->onPause();
             }
             if (e.type == SDL_EVENT_WILL_ENTER_FOREGROUND) {
-                gameplay_scene->resumeAudio();
+                if (!scene_stack.empty()) scene_stack.back()->onResume();
             }
 #endif
             input.handleSDLEvent(e, audio_now);
@@ -240,9 +228,6 @@ int main(int argc, char** argv) {
 
     // 8. Cleanup
     scene_stack.clear();
-#if !defined(__ANDROID__)
-    audio.shutdown();
-#endif
     batch.shutdown();
     SDL_GL_DestroyContext(gl_ctx);
     SDL_DestroyWindow(window);

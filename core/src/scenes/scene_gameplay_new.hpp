@@ -42,9 +42,11 @@ public:
 
     void loadChart(const std::string& path, const std::string& song_path);
 
-    const AudioClock& audioClock() const { return audio_->clock(); }
-    void pauseAudio() { if (audio_) audio_->pause(); }
-    void resumeAudio() { if (audio_) audio_->play(); }
+    int64_t currentTimeMs() const override {
+        return audio_ ? static_cast<int64_t>(audio_->clock().nowMs()) : SceneBase::currentTimeMs();
+    }
+    void onPause() override { if (audio_) audio_->pause(); }
+    void onResume() override { if (audio_) audio_->play(); }
 
 private:
     // ---- 核心子系统 ----
@@ -92,7 +94,7 @@ private:
         int64_t judged_time_ms;
         bool expired = false;
     };
-    std::vector<NoteJudgeState> note_judge_states_;
+    std::unordered_map<uint32_t, NoteJudgeState> note_judge_states_;
 
     // ---- 打击特效（旧系统兼容）----
     struct HitEffect {
@@ -103,11 +105,15 @@ private:
     };
     std::deque<HitEffect> hit_effects_;
 
+        // 上一帧音频时间戳（用于计算两帧间真实 dt）
+    int64_t last_frame_time_ms_ = 0;
+
     // ---- 方法 ----
     void BuildRenderFrame(int64_t audio_now_ms);
     void SyncNoteJudgments(const std::vector<JudgeResult>& results);
     void UpdateTransformer();
     float CalcApproachTimeMs() const;
+    float CalcApproachTimeMsForBpm(float bpm) const;
     float CalcFallRange() const;
 
     // 打击特效（兼容旧系统）

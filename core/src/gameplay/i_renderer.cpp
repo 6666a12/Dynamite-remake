@@ -7,7 +7,7 @@
 // ============================================================
 
 void RenderBatchRenderer::DrawRect(float x, float y, float w, float h, uint32_t color) {
-    batch_.submitRect(
+    batch_->submitRect(
         x * scale_ + offset_x_,
         y * scale_ + offset_y_,
         w * scale_,
@@ -17,7 +17,7 @@ void RenderBatchRenderer::DrawRect(float x, float y, float w, float h, uint32_t 
 
 void RenderBatchRenderer::DrawRoundedRect(float x, float y, float w, float h,
                                            float radius, uint32_t color) {
-    batch_.submitRoundedRect(
+    batch_->submitRoundedRect(
         x * scale_ + offset_x_,
         y * scale_ + offset_y_,
         w * scale_,
@@ -30,7 +30,7 @@ void RenderBatchRenderer::DrawTexture(const Texture* tex, float x, float y,
                                        float w, float h, uint32_t color,
                                        float uv_x, float uv_y,
                                        float uv_w, float uv_h) {
-    batch_.submit(
+    batch_->submit(
         tex,
         x * scale_ + offset_x_,
         y * scale_ + offset_y_,
@@ -42,7 +42,7 @@ void RenderBatchRenderer::DrawTexture(const Texture* tex, float x, float y,
 
 void RenderBatchRenderer::DrawText(const std::string& text, float x, float y,
                                     float scale, uint32_t color) {
-    batch_.submitText(text,
+    batch_->submitText(text,
         x * scale_ + offset_x_,
         y * scale_ + offset_y_,
         scale * scale_,
@@ -50,27 +50,27 @@ void RenderBatchRenderer::DrawText(const std::string& text, float x, float y,
 }
 
 const Texture* RenderBatchRenderer::GetNoteTapTex() const {
-    return batch_.getNoteTapTex();
+    return batch_->getNoteTapTex();
 }
 const Texture* RenderBatchRenderer::GetNoteHoldTex() const {
-    return batch_.getNoteHoldTex();
+    return batch_->getNoteHoldTex();
 }
 const Texture* RenderBatchRenderer::GetNoteHoldHeadTex() const {
-    return batch_.getNoteHoldHeadTex();
+    return batch_->getNoteHoldHeadTex();
 }
 const Texture* RenderBatchRenderer::GetNoteHoldPressedTex() const {
-    return batch_.getNoteHoldPressedTex();
+    return batch_->getNoteHoldPressedTex();
 }
 const Texture* RenderBatchRenderer::GetNoteHoldTailTex() const {
-    return batch_.getNoteHoldTailTex();
+    return batch_->getNoteHoldTailTex();
 }
 const Texture* RenderBatchRenderer::GetNoteHoldZeroTex() const {
-    return batch_.getNoteHoldZeroTex();
+    return batch_->getNoteHoldZeroTex();
 }
 const Texture* RenderBatchRenderer::GetNoteSlideTex() const {
-    return batch_.getNoteSlideTex();
+    return batch_->getNoteSlideTex();
 }
 const Texture* RenderBatchRenderer::GetEffectTex(const std::string& name, int index) const {
-    return batch_.getEffectTex(name, index);
+    return batch_->getEffectTex(name, index);
 }
 

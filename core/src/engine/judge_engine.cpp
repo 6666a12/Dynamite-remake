@@ -7,17 +7,18 @@
  * 2. 所有数组访问做边界检查
  * 3. 使用智能指针、RAII，禁止裸 new/delete
  *
-  * 判定规则（Dynamite 标准）：
+   * 判定规则（Dynamite 标准）：
  * - 三级判定：Perfect（±59ms）/ Good（±90ms）/ Miss（>150ms 自动 Miss）
- * - 触摸匹配只到 ±90ms，超过直接等 Auto Miss
- * - 长条(Hold)：头判+尾判，头判 Miss 则整根长条淡出
+ * - 触摸匹配上限 ±90ms（window_good），超出不参与判定，等待 150ms Auto Miss
+ * - SLIDE 判定：Catch-SLIDE（点击，参与防糊）+ Swipe-SLIDE（滑动，不参与防糊）
+ * - SLIDE 窗口：|delta|≤±59ms→PERFECT，+59~+90ms→Late GOOD，<-59ms 不触发
+  * - 长条(Hold)：头判+尾判，头判 Miss 则整根长条淡出
  *             按住过程中允许松开 500ms 内不断连
- * - 双押合并：相邻侧判定区域重叠 30%，点击中间区域可同时判定两侧
  * - 单触控判定：一个触控可判定多个同时的 note，不可判定多个不同时的 note
  * - 糊谱惩罚：多个不同时的 note，被同时的新触控试图判定 → 全部强制 Miss
+ * - 垂直投影（Vertical Judge）：下半屏触摸投影到底判线用于 DOWN 判定
  * - 结算：P=100%, G=50%, M=0%，准确率实时计算
- * - 评价预留：FULL COMBO / ALL PERFECT / ONE GOOD / ONE MISS / DOUBLE ONE
- * - R 值系统预留接口
+ * - 评价预留：FULL COMBO / ALL PERFECT
  */
 
 #include "engine/judge_engine.h"
@@ -84,8 +85,7 @@ void JudgeEngine::update(int64_t audio_now_ms, const std::vector<RawTouch>& touc
     auto mutable_touches = touches;
     projectVerticalJudge(mutable_touches);
 
-    // 2. 双押合并
-    processChordMerge(mutable_touches);
+    
 
     // 计算"新按下"的手指集合
     std::unordered_set<int64_t> current_fingers;
@@ -316,10 +316,10 @@ JudgeType JudgeEngine::judgeTiming(int64_t delta_ms) const {
 }
 
 JudgeType JudgeEngine::judgeSlideTiming(int64_t delta_ms) const {
-    // SLIDE 判定窗口：
-    //   |delta| <= window_perfect（±25ms）→ PERFECT（含 early perfect）
-    //   +window_perfect < delta <= +window_good（+25~+55ms）→ Late GOOD
-    //   其他 → MISS（delta < -25ms 不在判定触发范围内，但这里只做窗口判断）
+        // SLIDE 判定窗口（Dynamite 标准）：
+    //   |delta| <= window_perfect（±59ms）→ PERFECT（含 early perfect）
+    //   +window_perfect < delta <= +window_good（+59~+90ms）→ Late GOOD
+    //   其他 → MISS（delta < -59ms 不在判定触发范围内，等待后续 Swipe）
     if (std::llabs(delta_ms) <= window_perfect) {
         return JudgeType::PERFECT;
     }
@@ -380,13 +380,7 @@ void JudgeEngine::processHold(int64_t now_ms, const std::vector<RawTouch>& touch
     }
 }
 
-void JudgeEngine::processChordMerge(std::vector<RawTouch>& touches) {
-    // 双押合并（简化版）：vertical judge 已处理了 LEFT-DOWN 和 RIGHT-DOWN 的对映。
-    // 此处只处理 LEFT 和 RIGHT 之间的重叠：当触摸在 LEFT 矩形和 RIGHT 矩形的
-    // 水平重叠区域内（罕见情况，只在窄屏上可能），生成两个虚拟触摸。
-    // 目前大部分情况无需额外处理，保留为空实现。
-    (void)touches;
-}
+
 
 void JudgeEngine::projectVerticalJudge(std::vector<RawTouch>& touches) const {
     // 垂直投影（Vertical Judge）：当触摸在屏幕下半部（y >= 0.5）且 x 在
@@ -460,7 +454,7 @@ void JudgeEngine::updateStats(JudgeType type) {
 }
 
 bool JudgeEngine::isTouchInSide(const RawTouch& touch, SideType side) const {
-    // Dynamix 真实判定区域（二维矩形，归一化坐标 0.0~1.0）:
+    // Dynamite 真实判定区域（二维矩形，归一化坐标 0.0~1.0）:
     //   LEFT 判线:  x=108px → 108/1920=0.05625, 判线半宽=24/1920=0.0125
     //   RIGHT 判线: x=1812px → 1812/1920=0.94375, 判线半宽=24/1920=0.0125
     //   BOTTOM 判线: y=945px → 945/1080=0.875, 判线半高=24/1080=0.0222

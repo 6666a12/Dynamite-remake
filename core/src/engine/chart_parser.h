@@ -14,7 +14,7 @@
  * 2. DynaMaker ZIP Package (.zip)   - 社区分发标准包
  * 3. DynaMaker Web JSON (.json)     - 网页版导出格式
  *
- * 设计原则：直接兼容社区生态，不发明自定义二进制格式。
+ * 性能优化：首次解析后自动写入 .chart 二进制缓存，后续加载优先读缓存（≈5ms vs 50-500ms）。
  */
 
 // ========== 社区包元数据 ==========
@@ -111,8 +111,10 @@ public:
     /// 从 .chart 二进制文件反序列化出 Chart
     static std::optional<Chart> readChart(const std::string& path);
 
-    /// 推断 .chart 缓存路径：将原始文件路径（.xml/.json）的扩展名替换为 .chart
-    static std::string cachePathFrom(const std::string& original_path);
+    /// 推断 .chart 缓存路径：将原始文件路径（.xml/.json/.zip）的扩展名替换为 .chart
+    /// 对于 ZIP 包，可传入难度名生成 song_GIGA.chart 这样的路径
+    static std::string cachePathFrom(const std::string& original_path,
+                                     const std::string& difficulty = "");
 
     /// 智能解析：优先读 .chart 缓存，若不存在或无效则解析原始文件并写入缓存
     static std::optional<Chart> parseWithCache(const std::string& path);
@@ -120,5 +122,7 @@ public:
 private:
     static double beatToSec(double beat_time, float bpm, double offset);
     static bool validateBounds(const Chart& chart);
+    static bool parseZipFile(const std::string& zip_path,
+                             std::vector<std::pair<std::string, std::vector<uint8_t>>>& files);
 };
 
