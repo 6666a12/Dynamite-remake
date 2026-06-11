@@ -5,6 +5,7 @@
 #include <string>
 #include <memory>
 #include <chrono>
+#include "../gameplay/gameplay_ui_config.hpp"
 
 class Texture;
 class RenderBatch;
@@ -112,10 +113,7 @@ public:
 
 private:
     // ====== 常量 ======
-    static constexpr int kDesignW = 1920;
-    static constexpr int kDesignH = 1080;
-    static constexpr float kHeaderH = 72.0f;
-    static constexpr float kFooterH = 64.0f;
+    // kDesignW/kDesignH/kHeaderH/kFooterH 继承自 SceneBase，无需重定义
     static constexpr float kCardW = 560.0f;
     static constexpr float kCardH = 280.0f;
     static constexpr float kCardGapX = 24.0f;

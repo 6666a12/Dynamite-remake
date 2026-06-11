@@ -39,7 +39,8 @@ public:
 
     // ---- 文字 ----
     virtual void DrawText(const std::string& text, float x, float y,
-                          float scale, uint32_t color) = 0;
+                          float scale, uint32_t color,
+                          bool monospace = false) = 0;
 
     // ---- 获取纹理引用 ----
     virtual const Texture* GetNoteTapTex() const = 0;
@@ -74,7 +75,8 @@ public:
                      float uv_x, float uv_y,
                      float uv_w, float uv_h) override;
     void DrawText(const std::string& text, float x, float y,
-                  float scale, uint32_t color) override;
+                  float scale, uint32_t color,
+                  bool monospace = false) override;
 
     const Texture* GetNoteTapTex() const override;
     const Texture* GetNoteHoldTex() const override;

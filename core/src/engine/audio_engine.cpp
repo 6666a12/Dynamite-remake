@@ -86,6 +86,7 @@ void AudioEngine::shutdown() {
  * - 解码器输出格式被强制转换为与设备一致的 f32/2ch/44100
  */
 bool AudioEngine::loadSong(const std::string& path) {
+    reached_end_ = false;  // 新歌曲，重置结束标志
     if (!device_) {
         return false; // 设备未初始化，无法加载
     }
@@ -186,6 +187,13 @@ bool AudioEngine::isPlaying() const {
     return is_playing_;
 }
 
+bool AudioEngine::hasReachedEnd() const {
+    // 使用 reached_end_ 标志（在 mixAudio 中设置），
+    // 避免依赖 ma_data_source_get_length 对解码器的不可靠返回
+    if (!decoder_) return true;
+    return reached_end_;
+}
+
 /**
  * @brief 混音主函数 —— 从解码器读取 PCM 并填充到输出缓冲区
  * @param output     输出缓冲区（float32 格式，交错排列 L/R/L/R...）
@@ -214,6 +222,7 @@ void AudioEngine::mixAudio(float* output, uint32_t frameCount) {
 
     // 若读到文件末尾或发生错误，将剩余缓冲区填充为静音
     if (result != MA_SUCCESS || framesRead < frameCount) {
+        reached_end_ = true;  // 标记播放结束
         const ma_uint32 channels = device_->playback.channels;
         const size_t samplesRead = static_cast<size_t>(framesRead) * channels;
         const size_t totalSamples = static_cast<size_t>(frameCount) * channels;

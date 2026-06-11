@@ -34,6 +34,7 @@
 // stb_truetype 实现：在包含头文件前定义此宏
 #define STB_TRUETYPE_IMPLEMENTATION
 #include <stb_truetype.h>
+#include "../gameplay/gameplay_ui_config.hpp"
 
 // ============================================================
 // 顶点着色器：接收 2D 位置、UV、颜色，应用正交投影矩阵
@@ -133,6 +134,7 @@ struct FontAtlas {
     bool initialized = false;               // 是否已完成初始化
     stbtt_bakedchar cdata[96];              // 96 个可打印 ASCII 字符的 bake 信息
     Texture texture;                        // 纹理对象（RAII 管理）
+    float mono_advance = 0.0f;              // 等宽数字的统一字符前进量
     static constexpr int kAtlasW = 512;     // atlas 宽度
     static constexpr int kAtlasH = 512;     // atlas 高度
     static constexpr int kFontSize = 32;    // 烘焙字号
@@ -146,12 +148,6 @@ static FontAtlas g_font_atlas;
 // ============================================================
 
 /** 将 RGBA 四分量打包为 uint32_t（little-endian 内存布局为 R,G,B,A） */
-static inline uint32_t PackColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-    return static_cast<uint32_t>(r)
-         | (static_cast<uint32_t>(g) << 8)
-         | (static_cast<uint32_t>(b) << 16)
-         | (static_cast<uint32_t>(a) << 24);
-}
 
 /** 尝试从常见系统路径加载字体并烘焙 atlas */
 static bool InitFontAtlas() {
@@ -229,6 +225,17 @@ static bool InitFontAtlas() {
         g_font_atlas.initialized = true; // 标记已尝试，避免每帧重试
         return false;
     }
+
+    // 计算等宽数字的统一前进量（取 0-9 及符号中最大的 xadvance）
+    float max_adv = 0.0f;
+    const char mono_chars[] = "0123456789.,:+-";
+    for (const char* p = mono_chars; *p; ++p) {
+        int idx = static_cast<int>(*p) - 32;
+        if (idx >= 0 && idx < 96) {
+            max_adv = std::max(max_adv, g_font_atlas.cdata[idx].xadvance);
+        }
+    }
+    g_font_atlas.mono_advance = max_adv;
 
     // stbtt 输出为单通道灰度，需扩展为 RGBA 以兼容我们的纹理上传逻辑
     std::vector<uint8_t> rgba(FontAtlas::kAtlasW * FontAtlas::kAtlasH * 4);
@@ -643,7 +650,8 @@ void RenderBatch::submitNote(const NoteData& note,
 void RenderBatch::submitText(const std::string& text,
                              float x, float y,
                              float scale,
-                             uint32_t color) {
+                             uint32_t color,
+                             bool monospace) {
     if (!g_font_atlas.initialized) {
         if (!InitFontAtlas()) {
             return;  // 字体加载失败，放弃文字渲染
@@ -657,31 +665,70 @@ void RenderBatch::submitText(const std::string& text,
     // 我们在“字体像素坐标空间”计算，最后将输出坐标整体乘以 scale
     float xpos = 0.0f;
     float ypos = 0.0f;
+    const float mono_adv = g_font_atlas.mono_advance;
 
     for (char ch : text) {
         if (ch < 32 || ch >= 128) {
             continue;  // 跳过不可打印字符
         }
 
-        stbtt_aligned_quad q;
-        stbtt_GetBakedQuad(g_font_atlas.cdata,
-                           FontAtlas::kAtlasW,
-                           FontAtlas::kAtlasH,
-                           ch - 32,
-                           &xpos, &ypos,
-                           &q, 1);  // 1 = OpenGL 坐标系（Y 向下）
+        // 等宽模式：数字和符号使用统一前进量，防止数值变化时水平抖动
+        const bool is_mono_char = monospace && 
+            ((ch >= '0' && ch <= '9') || ch == '.' || ch == ',' || 
+             ch == ':' || ch == '+' || ch == '-');
+        
+        if (is_mono_char) {
+            int idx = ch - 32;
+            if (idx < 0 || idx >= 96) continue;
+            
+            stbtt_bakedchar& bc = g_font_atlas.cdata[idx];
+            float char_w = bc.x1 - bc.x0;
+            float center_offset = (mono_adv - char_w) * 0.5f;
+            
+            // 使用统一前进量，字符居中
+            stbtt_aligned_quad q;
+            q.x0 = bc.xoff + xpos + center_offset;
+            q.x1 = bc.xoff + xpos + center_offset + char_w;
+            q.y0 = bc.yoff;
+            q.y1 = bc.yoff + (bc.y1 - bc.y0);
+            q.s0 = bc.x0 / static_cast<float>(FontAtlas::kAtlasW);
+            q.t0 = bc.y0 / static_cast<float>(FontAtlas::kAtlasH);
+            q.s1 = bc.x1 / static_cast<float>(FontAtlas::kAtlasW);
+            q.t1 = bc.y1 / static_cast<float>(FontAtlas::kAtlasH);
+            
+            xpos += mono_adv;  // 统一前进量
+            
+            float dx = x + q.x0 * scale;
+            float dy = y + q.y0 * scale;
+            float dw = (q.x1 - q.x0) * scale;
+            float dh = (q.y1 - q.y0) * scale;
+            
+            submit(&g_font_atlas.texture,
+                   dx, dy, dw, dh,
+                   color, 0.0f,
+                   q.s0, q.t0,
+                   q.s1 - q.s0, q.t1 - q.t0);
+        } else {
+            stbtt_aligned_quad q;
+            stbtt_GetBakedQuad(g_font_atlas.cdata,
+                               FontAtlas::kAtlasW,
+                               FontAtlas::kAtlasH,
+                               ch - 32,
+                               &xpos, &ypos,
+                               &q, 1);  // 1 = OpenGL 坐标系（Y 向下）
 
-        // 将像素坐标平移到 (x,y) 锚点并缩放
-        float dx = x + q.x0 * scale;
-        float dy = y + q.y0 * scale;
-        float dw = (q.x1 - q.x0) * scale;
-        float dh = (q.y1 - q.y0) * scale;
+            // 将像素坐标平移到 (x,y) 锚点并缩放
+            float dx = x + q.x0 * scale;
+            float dy = y + q.y0 * scale;
+            float dw = (q.x1 - q.x0) * scale;
+            float dh = (q.y1 - q.y0) * scale;
 
-        submit(&g_font_atlas.texture,
-               dx, dy, dw, dh,
-               color, 0.0f,
-               q.s0, q.t0,
-               q.s1 - q.s0, q.t1 - q.t0);
+            submit(&g_font_atlas.texture,
+                   dx, dy, dw, dh,
+                   color, 0.0f,
+                   q.s0, q.t0,
+                   q.s1 - q.s0, q.t1 - q.t0);
+        }
     }
 }
 

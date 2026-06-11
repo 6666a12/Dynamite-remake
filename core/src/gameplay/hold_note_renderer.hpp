@@ -4,6 +4,7 @@
 #include <memory>
 
 class IRenderer;
+class Texture;
 
 /**
  * Hold Note 渲染器 —— v1.1 规范 + 真身体/假身体设计

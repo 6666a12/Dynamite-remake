@@ -18,17 +18,12 @@
 #include <cmath>
 #include <algorithm>
 #include <sstream>
+#include "../gameplay/gameplay_ui_config.hpp"
 
 // ============================================================
 // 工具函数
 // ============================================================
 
-static inline uint32_t PackColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-    return static_cast<uint32_t>(r)
-         | (static_cast<uint32_t>(g) << 8)
-         | (static_cast<uint32_t>(b) << 16)
-         | (static_cast<uint32_t>(a) << 24);
-}
 
 static uint32_t diffColor(DifficultyColor dc, uint8_t alpha) {
     switch (dc) {
@@ -74,6 +69,7 @@ void SceneShop::exit() {
 }
 
 void SceneShop::update(int64_t audio_now_ms) {
+    stripe_time_ms_ = audio_now_ms;  // 驱动斜纹滚动
     (void)audio_now_ms;
 
     // 惯性滚动衰减
@@ -204,7 +200,7 @@ void SceneShop::drawHeader(RenderBatch& batch) {
     // 等级
     std::string level_str = "Lv." + std::to_string(player_.level);
     batch.submitText(level_str, 76.0f, 42.0f, 0.6f,
-                     PackColor(156, 163, 175, 255));
+                     PackColor(156, 163, 175, 255), true);
 
     // 体力条
     float stamina_x = 300.0f;
@@ -224,12 +220,12 @@ void SceneShop::drawHeader(RenderBatch& batch) {
     // 货币（菱形币）
     std::string coin_str = "♢ " + std::to_string(player_.currency_base);
     batch.submitText(coin_str, stamina_x + stamina_w + 40.0f, 16.0f, 0.8f,
-                     PackColor(226, 232, 240, 255));
+                     PackColor(226, 232, 240, 255), true);
 
     // 货币（钻石）
     std::string diamond_str = "◇ " + std::to_string(player_.currency_premium);
     batch.submitText(diamond_str, stamina_x + stamina_w + 40.0f, 38.0f, 0.8f,
-                     PackColor(56, 189, 248, 255));
+                     PackColor(56, 189, 248, 255), true);
 
     // 返回按钮（右上）
     batch.submitRoundedRect(hw - 100.0f, 14.0f, 80.0f, 44.0f, 22.0f,
@@ -344,7 +340,7 @@ void SceneShop::drawCard(RenderBatch& batch, const ShopItem& item, float x, floa
         batch.submitRoundedRect(price_x, price_y, 80.0f, 26.0f, 13.0f,
                                 PackColor(59, 130, 246, 180));
         std::string price_str = std::to_string(item.price);
-        batch.submitText(price_str, price_x + 10.0f, price_y + 5.0f, 0.5f, price_color);
+        batch.submitText(price_str, price_x + 10.0f, price_y + 5.0f, 0.5f, price_color, true);
     } else {
         // 锁定
         batch.submitRoundedRect(price_x, price_y, 80.0f, 26.0f, 13.0f,
@@ -511,7 +507,8 @@ void SceneShop::handleInput(const std::vector<RawTouch>& touches,
             // 单击检测
 
             // 返回按钮（右上角）
-            if (px >= static_cast<float>(kDesignW) - 100.0f && py <= kHeaderH) {
+            if (HitTest(px, py, static_cast<float>(kDesignW) - 100.0f, 0.0f,
+                        100.0f, kHeaderH)) {
                 transition_request_.type = Transition::POP;
                 return;
             }
@@ -531,7 +528,7 @@ void SceneShop::handleInput(const std::vector<RawTouch>& touches,
                 float gap = 10.0f;
                 for (int i = 0; i < 3; ++i) {
                     float bx = btn_x + i * (btn_w + gap);
-                    if (px >= bx && px <= bx + btn_w) {
+                    if (HitTest(px, py, bx, fy, btn_w, kFooterH)) {
                         if (show_dropdown_ && dropdown_type_ == i + 1) {
                             show_dropdown_ = false;
                             dropdown_type_ = 0;

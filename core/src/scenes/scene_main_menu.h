@@ -38,10 +38,7 @@ public:
     void handleInput(const std::vector<RawTouch>& touches, int64_t audio_now_ms) override;
 
 private:
-    static constexpr int kDesignW = 1920;
-    static constexpr int kDesignH = 1080;
-    static constexpr float kTopBarH = 72.0f;
-    static constexpr float kFooterH = 48.0f;
+    // 布局常量已移至 SceneBase (kDesignW/kDesignH/kHeaderH/kFooterH)
 
     struct MenuButton {
         float x, y, w, h;

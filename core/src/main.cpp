@@ -29,6 +29,7 @@
 #include "scenes/scene_gameplay_new.hpp"
 #include "scenes/scene_result.h"
 #include "scenes/scene_shop.h"
+#include "scenes/scene_settings.h"
 #include "bridge/go_bridge.h"
 #include "utils/logger.h"
 #include "utils/config_manager.h"
@@ -180,18 +181,29 @@ int main(int argc, char** argv) {
                         case SceneID::SONG_SELECT:
                             scene_stack.push_back(std::make_unique<SceneSongSelect>());
                             break;
-                        case SceneID::GAMEPLAY:
-                            scene_stack.push_back(std::make_unique<SceneGameplay>());
+                        case SceneID::GAMEPLAY: {
+                            auto gameplay = std::make_unique<SceneGameplay>();
+                            // 从 TransitionRequest 读取谱面/音频路径
+                            if (!req.payload.chart_path.empty()) {
+                                gameplay->loadChart(req.payload.chart_path, req.payload.audio_path);
+                            }
+                            scene_stack.push_back(std::move(gameplay));
                             break;
-                        case SceneID::RESULT:
-                            scene_stack.push_back(std::make_unique<SceneResult>());
+                        }
+                        case SceneID::RESULT: {
+                            auto result = std::make_unique<SceneResult>();
+                            result->setTransitionPayload(req.payload);
+                            scene_stack.push_back(std::move(result));
                             break;
+                        }
                         case SceneID::SHOP:
                             scene_stack.push_back(std::make_unique<SceneShop>());
                             break;
+                        case SceneID::SETTINGS:
+                            scene_stack.push_back(std::make_unique<SceneSettings>());
+                            break;
                         case SceneID::EVENT:
                         case SceneID::SKILL_SET:
-                        case SceneID::SETTINGS:
                             scene_stack.push_back(std::make_unique<SceneMainMenu>());
                             break;
                         default:

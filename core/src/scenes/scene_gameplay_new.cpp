@@ -20,21 +20,12 @@
 #include <cmath>
 #include <algorithm>
 #include <unordered_map>
+#include "../gameplay/gameplay_ui_config.hpp"
 
-static constexpr int kDesignW = 1920;
-static constexpr int kDesignH = 1080;
 
-static inline uint32_t PackColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-    return static_cast<uint32_t>(r)
-         | (static_cast<uint32_t>(g) << 8)
-         | (static_cast<uint32_t>(b) << 16)
-         | (static_cast<uint32_t>(a) << 24);
-}
 
 // 跨场景共享结算数据（与旧版兼容）
-extern JudgeEngine::Stats s_pending_stats;
-extern std::string s_pending_song_title;
-extern std::string s_pending_difficulty;
+// (全局变量已移除，改用 TransitionRequest.payload)
 
 // 本帧触摸缓存
 static std::vector<RawTouch> s_current_touches;
@@ -60,11 +51,18 @@ void SceneGameplay::init() {
 void SceneGameplay::enter() {
     is_playing_ = true;
     last_frame_time_ms_ = 0;  // 重置帧计时，避免首次 update 使用旧值
+    last_judge_time_ms_ = 0;  // 重置固定步长计时器
+    judge_accumulator_ = 0;
     note_judge_states_.clear();
     hit_effects_.clear();
     frame_ = GameplayRenderFrame{};
 
-    if (audio_) audio_->play();
+    if (audio_) {
+        audio_->play();
+    } else {
+        audio_error_ = true;
+        Logger::warn("SceneGameplay: audio unavailable, running silent");
+    }
 }
 
 void SceneGameplay::exit() {
@@ -77,8 +75,10 @@ void SceneGameplay::loadChart(const std::string& path, const std::string& song_p
     if (chart_opt) {
         chart_ = std::make_unique<Chart>(*chart_opt);
         judge_->loadChart(chart_->notes);
-        s_pending_song_title = chart_->song_id;
-        s_pending_difficulty = chart_->difficulty;
+        transition_request_.payload.song_title = chart_->song_id;
+        transition_request_.payload.difficulty = chart_->difficulty;
+        transition_request_.payload.chart_path = path;
+        transition_request_.payload.audio_path = song_path;
         current_song_title_ = chart_->song_id;
         current_difficulty_ = chart_->difficulty;
 
@@ -118,9 +118,29 @@ void SceneGameplay::loadChart(const std::string& path, const std::string& song_p
 
 void SceneGameplay::update(int64_t audio_now_ms) {
     if (!is_playing_ || !judge_) return;
+    pm_.beginFrame();
 
-    // 判定引擎运行（音频时间驱动）
-    judge_->update(audio_now_ms, s_current_touches);
+    // ---- 固定步长判定循环（与显示器刷新率解耦） ----
+    // 积累自上次 update 以来的音频时间，以 2ms 步长推进 judge
+    if (last_judge_time_ms_ == 0) {
+        last_judge_time_ms_ = audio_now_ms;   // 首帧：避免从 0 累积
+    }
+    int64_t elapsed = audio_now_ms - last_judge_time_ms_;
+    if (elapsed < 0) elapsed = 0;             // 防御：时钟不应倒退
+    judge_accumulator_ += elapsed;
+    last_judge_time_ms_ = audio_now_ms;
+
+    // 上限防螺旋：掉帧严重时最多追赶 50ms，丢弃多余时间
+    if (judge_accumulator_ > kMaxAccumulatorMs) {
+        judge_accumulator_ = kMaxAccumulatorMs;
+    }
+
+    while (judge_accumulator_ >= kJudgeStepMs) {
+        // 计算本次子步的音频时间点（从累加器尾部往前推）
+        int64_t judge_time = audio_now_ms - judge_accumulator_ + kJudgeStepMs;
+        judge_->update(judge_time, s_current_touches);
+        judge_accumulator_ -= kJudgeStepMs;
+    }
 
     // ---- 同步 Note 判定状态 ----
     SyncNoteJudgments(judge_->frameResults());
@@ -151,8 +171,24 @@ void SceneGameplay::update(int64_t audio_now_ms) {
 
     // ---- 谱面结束检测 ----
     auto stats = judge_->currentStats();
-    if (chart_ && audio_now_ms > static_cast<int64_t>(chart_->duration_ms) + 2000) {
-        s_pending_stats = stats;
+    // 检测谱面结束：优先使用音频播放结束信号，回退到谱面时长
+    bool chart_ended = false;
+    if (audio_ && audio_->hasReachedEnd()) {
+        chart_ended = true;
+    } else if (chart_ && audio_now_ms > static_cast<int64_t>(chart_->duration_ms) + 2000) {
+        chart_ended = true;
+    }
+    
+    if (chart_ended) {
+        auto& p = transition_request_.payload;
+        p.perfect = stats.perfect;
+        p.good = stats.good;
+        p.miss = stats.miss;
+        p.max_combo = stats.max_combo;
+        p.score = stats.score;
+        p.accuracy = stats.accuracy;
+        p.is_full_combo = stats.is_full_combo;
+        p.is_all_perfect = stats.is_all_perfect;
 #if defined(__ANDROID__)
         transition_request_.type = Transition::POP;
 #else
@@ -265,21 +301,22 @@ void SceneGameplay::render(RenderBatch& batch, int64_t audio_now_ms) {
     hud_renderer_->Render(frame_, kDesignW);
     footer_renderer_->Render(frame_.song_title, frame_.difficulty_label,
                              frame_.difficulty_color, kDesignW, kDesignH);
+
+    pm_.endFrame();
+    if (pm_.shouldReport()) {
+        char buf[80];
+        snprintf(buf, sizeof(buf), "FPS perf: avg=%.1fms max=%.1fms | frame #%d",
+                 pm_.avgMs(), pm_.maxMs(), pm_.frameCount());
+        Logger::info("{}", std::string(buf));
+    }
 }
 
 // ============================================================
 // 构建渲染帧（核心：将 NoteData + 判定状态 → NoteRenderCommand）
 // ============================================================
 
-void SceneGameplay::BuildRenderFrame(int64_t audio_now_ms) {
-    note_cmds_.clear();
-    effect_cmds_.clear();
-    frame_.notes.clear();
-    frame_.effects.clear();
-
-    if (!chart_) return;
-
-    // ---- HUD 数据 ----
+// ---- 子步骤 1: HUD 数据 ----
+void SceneGameplay::PopulateHUDData() {
     auto stats = judge_->currentStats();
     frame_.perfect_count = stats.perfect;
     frame_.good_count = stats.good;
@@ -292,67 +329,162 @@ void SceneGameplay::BuildRenderFrame(int64_t audio_now_ms) {
     frame_.difficulty_label = current_difficulty_;
     frame_.difficulty_color = current_diff_color_;
     frame_.cover_darken = cover_tex_ ? 0.5f : 0.0f;
+}
 
-    // ---- 从 NoteData 转化 NoteRenderCommand ----
-    const float approach_time = CalcApproachTimeMsForBpm(chart_->bpm);
-    const float fall_range = CalcFallRange();
-    const float post_judge_slowdown_ms = 800.0f;
-    const float extra_dist_ratio = 0.30f;
-
-    note_cmds_.reserve(chart_->notes.size());
-
-    // ---- 预构建 hold 按住状态查表（O(Holds) 一次，后续 O(1) 查询）----
-    std::unordered_map<uint32_t, bool> hold_held_map;
+// ---- 子步骤 2: Hold 按住状态查表 ----
+std::unordered_map<uint32_t, bool> SceneGameplay::BuildHoldHeldMap() const {
+    std::unordered_map<uint32_t, bool> m;
     if (judge_) {
         const auto& hold_states = judge_->currentHoldStates();
-        hold_held_map.reserve(hold_states.size());
+        m.reserve(hold_states.size());
         for (const auto& hs : hold_states) {
-            hold_held_map[hs.note_id] = hs.is_held;
+            m[hs.note_id] = hs.is_held;
         }
     }
+    return m;
+}
 
+// ---- 子步骤 3: 下落进度 (t) 和像素距离 (dist) ----
+SceneGameplay::NoteProgress SceneGameplay::ComputeNoteProgress(
+    float dt, float approach_time, float fall_range) const
+{
+    static constexpr float kPostJudgeSlowdownMs = 800.0f;
+    static constexpr float kExtraDistRatio = 0.30f;
+
+    float t;
+    if (dt > 0.0f) {
+        t = 1.0f - (dt / approach_time);
+        t = std::max(0.0f, t);
+    } else {
+        float elapsed_after = -dt;
+        float slowdown_ratio = std::min(1.0f, elapsed_after / kPostJudgeSlowdownMs);
+        float eased = slowdown_ratio * (2.0f - slowdown_ratio);
+        t = 1.0f + eased * kExtraDistRatio;
+    }
+    return {t, t * fall_range};
+}
+
+// ---- 子步骤 4: Alpha 透明度衰减 ----
+float SceneGameplay::ComputeNoteAlpha(
+    bool is_judged, float dt, int64_t audio_now_ms,
+    const NoteJudgeState* judge_state) const
+{
+    static constexpr float kPostJudgeSlowdownMs = 800.0f;
+
+    if (is_judged && judge_state) {
+        float elapsed = static_cast<float>(audio_now_ms - judge_state->judged_time_ms);
+        if (elapsed >= kPostJudgeSlowdownMs) return -1.0f;  // 已过期
+        float fade_t = elapsed / kPostJudgeSlowdownMs;
+        return 1.0f - fade_t * fade_t;
+    }
+    if (!is_judged && dt < 0.0f) {
+        float elapsed_after = -dt;
+        float fade_t = std::min(1.0f, elapsed_after / kPostJudgeSlowdownMs);
+        float alpha = 1.0f - fade_t * 0.6f;
+        return std::max(0.4f, alpha);
+    }
+    return 1.0f;
+}
+
+// ---- 子步骤 5: 轨道坐标 (lane_pos + front width/thickness) ----
+SceneGameplay::LanePosition SceneGameplay::ComputeLanePosition(
+    SideType side, float position) const
+{
+    static constexpr float kTrackWidth   = static_cast<float>(kDesignW) * 0.8875f;
+    static constexpr float kTrackHeight  = static_cast<float>(kDesignH) * 0.875f;
+
+    LanePosition lp{};
+    if (side == SideType::DOWN) {
+        lp.lane_pos = (position - 0.5f) * kTrackWidth * 0.8f;
+        lp.front_width = GameplayUI::NOTE_WIDTH_BASE;
+        lp.front_thickness = GameplayUI::NOTE_THICKNESS_BASE;
+    } else {
+        lp.lane_pos = (position - 0.5f) * kTrackHeight * 0.6f;
+        lp.front_width = GameplayUI::NOTE_WIDTH_BASE * GameplayUI::SIDE_WIDTH_SCALE;
+        lp.front_thickness = GameplayUI::NOTE_THICKNESS_BASE;
+    }
+    return lp;
+}
+
+// ---- 子步骤 6: 长条像素长度 ----
+void SceneGameplay::ComputeHoldFields(
+    NoteRenderCommand& cmd, const NoteData& note,
+    float fall_range, float approach_time) const
+{
+    if (note.type != NoteType::HOLD_HEAD && note.type != NoteType::HOLD_TAIL) return;
+    if (note.duration_ms > 0) {
+        float dur_s = static_cast<float>(note.duration_ms) / 1000.0f;
+        cmd.hold_length_front = dur_s * note_speed_ * fall_range / (approach_time / 1000.0f);
+        cmd.hold_length_front = std::max(20.0f, cmd.hold_length_front);
+    }
+    cmd.hold_progress = 0.0f;
+}
+
+// ---- 子步骤 7: 判定状态 → 渲染状态码 ----
+int SceneGameplay::MapJudgeState(
+    bool is_judged, const NoteJudgeState* judge_state,
+    NoteType note_type, float dt,
+    const std::unordered_map<uint32_t, bool>& hold_held_map,
+    uint32_t note_id) const
+{
+    auto is_hold = [](NoteType t) {
+        return t == NoteType::HOLD_HEAD || t == NoteType::HOLD_TAIL;
+    };
+
+    if (is_judged && judge_state) {
+        if (judge_state->result == JudgeType::MISS) return 4;
+
+        bool held = false;
+        auto it = hold_held_map.find(note_id);
+        if (it != hold_held_map.end()) held = it->second;
+
+        if (is_hold(note_type) && held) return 5;  // Holding
+
+        return (judge_state->result == JudgeType::GOOD) ? 3 : 2;
+    }
+
+    // 未判定
+    return (dt <= 0.0f) ? 1 : 0;
+}
+
+// ---- 主函数（重组后 ~50 行）----
+void SceneGameplay::BuildRenderFrame(int64_t audio_now_ms) {
+    note_cmds_.clear();
+    effect_cmds_.clear();
+    frame_.notes.clear();
+    frame_.effects.clear();
+
+    if (!chart_) return;
+
+    // 1. HUD
+    PopulateHUDData();
+
+    // 2. 预计算
+    const float approach_time = CalcApproachTimeMsForBpm(chart_->bpm);
+    const float fall_range = CalcFallRange();
+    note_cmds_.reserve(chart_->notes.size());
+    auto hold_held_map = BuildHoldHeldMap();
+
+    // 3. NoteData → NoteRenderCommand
     for (const auto& note : chart_->notes) {
         if (note.type == NoteType::HOLD_BODY) continue;
 
         float dt = static_cast<float>(note.time_ms - audio_now_ms);
         if (dt > approach_time) continue;
 
-        // ---- 查找判定状态（O(1)）----
         auto judge_it = note_judge_states_.find(note.id);
         bool is_judged = (judge_it != note_judge_states_.end() && !judge_it->second.expired);
+        const NoteJudgeState* js = is_judged ? &judge_it->second : nullptr;
 
-        // ---- 计算 t（下落进度）和 distance ----
-        float t;
-        if (dt > 0.0f) {
-            t = 1.0f - (dt / approach_time);
-            t = std::max(0.0f, t);
-        } else {
-            float elapsed_after = -dt;
-            float slowdown_ratio = std::min(1.0f, elapsed_after / post_judge_slowdown_ms);
-            float eased = slowdown_ratio * (2.0f - slowdown_ratio);
-            float extra = extra_dist_ratio;
-            t = 1.0f + eased * extra;
-        }
-        float dist = t * fall_range;
-
-        // ---- 计算 alpha ----
-        float alpha = 1.0f;
-        if (is_judged) {
-            float elapsed_since_judge = static_cast<float>(audio_now_ms - judge_it->second.judged_time_ms);
-            if (elapsed_since_judge >= post_judge_slowdown_ms) {
-                judge_it->second.expired = true;
-                continue;
-            }
-            float fade_t = elapsed_since_judge / post_judge_slowdown_ms;
-            alpha = 1.0f - fade_t * fade_t;
-        } else if (dt < 0.0f) {
-            float elapsed_after = -dt;
-            float fade_t = std::min(1.0f, elapsed_after / post_judge_slowdown_ms);
-            alpha = 1.0f - fade_t * 0.6f;
-            alpha = std::max(0.4f, alpha);
+        // Alpha（返回 -1 表示过期）
+        float alpha = ComputeNoteAlpha(is_judged, dt, audio_now_ms, js);
+        if (alpha < 0.0f) {
+            const_cast<NoteJudgeState*>(js)->expired = true;
+            continue;
         }
 
-        // ---- 构建 NoteRenderCommand ----
+        auto [t, dist] = ComputeNoteProgress(dt, approach_time, fall_range);
+
         NoteRenderCommand cmd{};
         cmd.id = static_cast<int32_t>(note.id);
         cmd.note_type = note.type;
@@ -360,98 +492,34 @@ void SceneGameplay::BuildRenderFrame(int64_t audio_now_ms) {
         cmd.alpha = alpha;
         cmd.scale = 1.0f;
 
-        // 计算局部坐标 (lane_pos, distance)
-        // Dynamite 实际布局 (1920x1080):
-        //   LEFT 判线: x=108, RIGHT 判线: x=1812, BOTTOM 判线: y=945
-        //   DOWN: position -> 水平偏移, distance -> 离判线的垂直距离 (从上往下落)
-        //   LEFT: position -> 垂直偏移, distance -> 离判线的水平距离 (从右向左飞)
-        //   RIGHT: position -> 垂直偏移, distance -> 离判线的水平距离 (从左向右飞)
-        constexpr float kBottomJudgeY = static_cast<float>(kDesignH) * 0.875f;  // 945
-        constexpr float kLaneCenterY  = kBottomJudgeY * 0.5f;
-        constexpr float kTrackWidth   = static_cast<float>(kDesignW) * 0.8875f; // 1812-108=1704
-        constexpr float kTrackHeight  = kBottomJudgeY;                          // 945
+        auto lp = ComputeLanePosition(note.side, note.position);
+        cmd.lane_pos = lp.lane_pos;
+        cmd.distance = dist;
+        cmd.front_width = lp.front_width;
+        cmd.front_thickness = lp.front_thickness;
 
-        if (note.side == SideType::DOWN) {
-            // DOWN: 从上往下落, position=0 在左, position=1 在右
-            cmd.lane_pos = (note.position - 0.5f) * kTrackWidth * 0.8f;
-            cmd.distance = dist;  // distance=0 在判线, 越大离判线越远 (向上)
-            cmd.front_width = GameplayUI::NOTE_WIDTH_BASE;
-            cmd.front_thickness = GameplayUI::NOTE_THICKNESS_BASE;
-        } else {
-            // LEFT/RIGHT: position=0 在下, position=1 在上
-            cmd.lane_pos = (note.position - 0.5f) * kTrackHeight * 0.6f;
-            cmd.distance = dist;  // distance=0 在判线, 越大离判线越远 (向两侧)
-            cmd.front_width = GameplayUI::NOTE_WIDTH_BASE * GameplayUI::SIDE_WIDTH_SCALE;
-            cmd.front_thickness = GameplayUI::NOTE_THICKNESS_BASE;
-        }
-
-        // Hold 专用字段
-        if (note.type == NoteType::HOLD_HEAD || note.type == NoteType::HOLD_TAIL) {
-            if (note.duration_ms > 0) {
-                float dur_s = static_cast<float>(note.duration_ms) / 1000.0f;
-                cmd.hold_length_front = dur_s * note_speed_ * fall_range / (approach_time / 1000.0f);
-                cmd.hold_length_front = std::max(20.0f, cmd.hold_length_front);
-            }
-            cmd.hold_progress = 0.0f;
-        }
-
-        // 判定状态映射
-        // 0=Pending, 1=Active(已过线等待判定), 2=Hit Perfect, 3=Hit Good, 4=Miss, 5=Holding
-        if (is_judged) {
-            switch (judge_it->second.result) {
-                case JudgeType::PERFECT:
-                    // hold 判定通过且在按住 → Holding
-                    if ((note.type == NoteType::HOLD_HEAD || note.type == NoteType::HOLD_TAIL)
-                        && hold_held_map.count(note.id) && hold_held_map[note.id]) {
-                        cmd.judge_state = 5;
-                    } else {
-                        cmd.judge_state = 2;
-                    }
-                    break;
-                case JudgeType::GOOD:
-                    if ((note.type == NoteType::HOLD_HEAD || note.type == NoteType::HOLD_TAIL)
-                        && hold_held_map.count(note.id) && hold_held_map[note.id]) {
-                        cmd.judge_state = 5;
-                    } else {
-                        cmd.judge_state = 3;
-                    }
-                    break;
-                case JudgeType::MISS:    cmd.judge_state = 4; break;
-            }
-        } else if (note.type == NoteType::HOLD_HEAD || note.type == NoteType::HOLD_TAIL) {
-            // hold 未判定：看 head 是否已过线
-            if (dt <= 0.0f) {
-                cmd.judge_state = 1;  // Active（已过线，等待判定结果）
-            } else {
-                cmd.judge_state = 0;  // Pending（尚未过线）
-            }
-        } else {
-            // tap/slide 未判定
-            cmd.judge_state = (dt <= 0.0f) ? 1 : 0;
-        }
+        ComputeHoldFields(cmd, note, fall_range, approach_time);
+        cmd.judge_state = MapJudgeState(is_judged, js, note.type, dt,
+                                        hold_held_map, note.id);
 
         note_cmds_.push_back(cmd);
     }
 
-    // ---- 排序：distance 大的先画（远处的 note 在底层）----
+    // 4. 排序（远的先画）
     std::stable_sort(note_cmds_.begin(), note_cmds_.end(),
         [](const NoteRenderCommand& a, const NoteRenderCommand& b) {
             return a.distance > b.distance;
         });
-
     frame_.notes = note_cmds_;
 
-    // ---- 特效指令（暂用旧系统的 hit_effects_）----
+    // 5. 特效
     for (const auto& eff : hit_effects_) {
         HitEffectCommand ec{};
         ec.lifetime = eff.lifetime;
         ec.max_lifetime = eff.max_lifetime;
-        // 判定类型从颜色反推
-        uint8_t r = eff.color & 0xFF;
-        ec.judgment_type = (r >= 200) ? 2 : 0; // 红色=Miss, 否则=Perfect
+        ec.judgment_type = ((eff.color & 0xFF) >= 200) ? 2 : 0;
         effect_cmds_.push_back(ec);
     }
-
     frame_.effects = effect_cmds_;
 }
 

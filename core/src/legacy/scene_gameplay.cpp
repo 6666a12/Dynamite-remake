@@ -21,16 +21,11 @@
 #include "engine/chart_parser.h"
 #include "utils/logger.h"
 #include <cmath>
+#include "../gameplay/gameplay_ui_config.hpp"
 
 static constexpr int kDesignW = 1920;
 static constexpr int kDesignH = 1080;
 
-static inline uint32_t PackColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-    return static_cast<uint32_t>(r)
-         | (static_cast<uint32_t>(g) << 8)
-         | (static_cast<uint32_t>(b) << 16)
-         | (static_cast<uint32_t>(a) << 24);
-}
 
 // ============================================================
 // 跨场景共享：游玩结束后的结算数据

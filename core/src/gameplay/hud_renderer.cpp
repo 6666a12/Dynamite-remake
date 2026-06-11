@@ -3,12 +3,6 @@
 #include "gameplay_ui_config.hpp"
 #include <cstdio>
 
-static inline uint32_t PackColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-    return static_cast<uint32_t>(r)
-         | (static_cast<uint32_t>(g) << 8)
-         | (static_cast<uint32_t>(b) << 16)
-         | (static_cast<uint32_t>(a) << 24);
-}
 
 HudRenderer::HudRenderer(std::shared_ptr<IRenderer> renderer)
     : renderer_(std::move(renderer)) {}
@@ -53,7 +47,7 @@ void HudRenderer::Render(const GameplayRenderFrame& frame, float screen_w) {
     renderer_->DrawText("ACC", acc_x, top_y + 2.0f, 0.7f,
                         GameplayUI::CLR_ACCURACY);
     renderer_->DrawText(acc_str, acc_x + 50.0f, top_y, 0.9f,
-                        GameplayUI::CLR_ACCURACY);
+                        GameplayUI::CLR_ACCURACY, true);
 
     // ---- Combo ----
     float left_x = margin;
@@ -64,7 +58,7 @@ void HudRenderer::Render(const GameplayRenderFrame& frame, float screen_w) {
         char combo_str[16];
         std::snprintf(combo_str, sizeof(combo_str), "%d", frame.combo);
         renderer_->DrawText(combo_str, left_x, combo_y + 40.0f, 1.4f,
-                            GameplayUI::CLR_AP_COMBO);
+                            GameplayUI::CLR_AP_COMBO, true);
     }
 
     // ---- 暂停图标 ----
@@ -95,5 +89,5 @@ void HudRenderer::DrawStatTag(const char* label, int value, uint32_t bg_color,
     char val_str[16];
     std::snprintf(val_str, sizeof(val_str), "%d", value);
     renderer_->DrawText(val_str, x + label_w, y + 2.0f, 0.8f,
-                        GameplayUI::CLR_TEXT_PRIMARY);
+                        GameplayUI::CLR_TEXT_PRIMARY, true);
 }

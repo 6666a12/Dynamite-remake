@@ -15,24 +15,14 @@
 #include "engine/judge_engine.h"
 #include "utils/logger.h"
 #include <cmath>
+#include "../gameplay/gameplay_ui_config.hpp"
 
-static constexpr int kDesignW = 1920;
-static constexpr int kDesignH = 1080;
-
-static inline uint32_t PackColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-    return static_cast<uint32_t>(r)
-         | (static_cast<uint32_t>(g) << 8)
-         | (static_cast<uint32_t>(b) << 16)
-         | (static_cast<uint32_t>(a) << 24);
-}
 
 // ============================================================
 // 跨场景共享数据声明（定义在 scene_gameplay.cpp）
 // ============================================================
 
-extern JudgeEngine::Stats s_pending_stats;
-extern std::string s_pending_song_title;
-extern std::string s_pending_difficulty;
+// (全局变量已移除，改用 TransitionRequest.payload)
 
 // ============================================================
 // 生命周期
@@ -40,10 +30,21 @@ extern std::string s_pending_difficulty;
 
 void SceneResult::init() {
     // 初始化时尝试接收来自游玩场景的结算数据
-    if (s_pending_stats.max_combo > 0 || s_pending_stats.score > 0) {
-        stats_ = s_pending_stats;
-        song_title_ = s_pending_song_title;
-        difficulty_ = s_pending_difficulty;
+    // 从 TransitionRequest payload 读取数据（无全局变量）
+    const auto& pld = transition_request_.payload;
+    if (pld.max_combo > 0 || pld.score > 0) {
+        stats_.perfect = pld.perfect;
+        stats_.good = pld.good;
+        stats_.miss = pld.miss;
+        stats_.max_combo = pld.max_combo;
+        stats_.score = pld.score;
+        stats_.accuracy = pld.accuracy;
+        stats_.is_full_combo = pld.is_full_combo;
+        stats_.is_all_perfect = pld.is_all_perfect;
+        song_title_ = pld.song_title;
+        difficulty_ = pld.difficulty;
+        chart_path_ = pld.chart_path;
+        audio_path_ = pld.audio_path;
     }
 
     anim_score_ = 0.0f;
@@ -59,6 +60,7 @@ void SceneResult::enter() {
 }
 
 void SceneResult::update(int64_t audio_now_ms) {
+    stripe_time_ms_ = audio_now_ms;  // 驱动斜纹滚动
     (void)audio_now_ms;
     if (anim_done_) {
         return;
@@ -103,7 +105,27 @@ void SceneResult::render(RenderBatch& batch, int64_t audio_now_ms) {
     (void)audio_now_ms;
 
     // 全屏深色背景
-    batch.submitRect(0.0f, 0.0f, kDesignW, kDesignH, PackColor(15, 15, 15, 255));
+    batch.submitRect(0.0f, 0.0f, static_cast<float>(kDesignW), static_cast<float>(kDesignH), PackColor(15, 15, 15, 255));
+    
+    // 顶栏 (72px, 45°斜纹向左滚动)
+    const float hdr_h = kHeaderH;
+    batch.submitRect(0.0f, 0.0f, static_cast<float>(kDesignW), hdr_h,
+                     PackColor(26, 26, 31, 255));
+    float stripe_off = -static_cast<float>(stripe_time_ms_) * 0.05f;
+    batch.submitStripedRect(0.0f, 0.0f, static_cast<float>(kDesignW), hdr_h,
+                            PackColor(26, 26, 31, 0),
+                            PackColor(35, 35, 40, 77),
+                            -1, stripe_off);
+    
+    // 底栏 (64px, 45°斜纹向右滚动)
+    const float ft_y = static_cast<float>(kDesignH) - kFooterH;
+    batch.submitRect(0.0f, ft_y, static_cast<float>(kDesignW), kFooterH,
+                     PackColor(15, 15, 15, 240));
+    float stripe_off2 = static_cast<float>(stripe_time_ms_) * 0.05f;
+    batch.submitStripedRect(0.0f, ft_y, static_cast<float>(kDesignW), kFooterH,
+                            PackColor(15, 15, 15, 0),
+                            PackColor(30, 30, 30, 64),
+                            1, stripe_off2);
 
         // ---------- 顶部标题 ----------
     batch.submitText("RESULT", kDesignW * 0.5f - 120.0f, 40.0f, 1.5f,
@@ -114,7 +136,7 @@ void SceneResult::render(RenderBatch& batch, int64_t audio_now_ms) {
     int display_score = static_cast<int>(anim_score_);
     batch.submitText(std::to_string(display_score),
                      kDesignW * 0.5f - 180.0f, score_y, 2.0f,
-                     PackColor(255, 255, 255, 255));
+                     PackColor(255, 255, 255, 255), true);
 
     // ---------- 评级 ----------
     std::string rating = getRating();
@@ -190,7 +212,7 @@ void SceneResult::drawStatsPanel(RenderBatch& batch, int screen_w, int screen_h)
         batch.submitText(items[i].label, item_x + 20.0f, label_y, 0.8f,
                          PackColor(180, 180, 180, 255));
         batch.submitText(std::to_string(items[i].value),
-                         item_x + 20.0f, value_y, 1.3f, items[i].color);
+                         item_x + 20.0f, value_y, 1.3f, items[i].color, true);
 
         // 项间分隔线
         if (i < 3) {
@@ -205,7 +227,7 @@ void SceneResult::drawStatsPanel(RenderBatch& batch, int screen_w, int screen_h)
     char acc_str[32];
     std::snprintf(acc_str, sizeof(acc_str), "ACCURACY: %.2f%%", stats_.accuracy);
     batch.submitText(acc_str, margin + 30.0f, acc_y, 0.9f,
-                     PackColor(255, 255, 255, 255));
+                     PackColor(255, 255, 255, 255), true);
 }
 
 // ============================================================
@@ -229,22 +251,21 @@ void SceneResult::handleInput(const std::vector<RawTouch>& touches,
         float py = t.y * kDesignH;
 
                 // 返回按钮区域检测（左侧）-> 回到主菜单
-        float back_left = kDesignW * 0.25f - btn_w * 0.5f;
-        float back_top  = btn_y;
-        if (px >= back_left && px <= back_left + btn_w &&
-            py >= back_top  && py <= back_top + btn_h) {
+                float back_left = kDesignW * 0.25f - btn_w * 0.5f;
+                if (HitTest(px, py, back_left, btn_y, btn_w, btn_h)) {
             transition_request_.type = Transition::PUSH;
-            transition_request_.target_scene_id = static_cast<int>(SceneID::MAIN_MENU);
+            transition_request_.target_scene_id = static_cast<int>(SceneID::SONG_SELECT);
             return;
         }
 
         // 重试按钮区域检测（右侧）
         float retry_left = kDesignW * 0.75f - btn_w * 0.5f;
-        float retry_top  = btn_y;
-        if (px >= retry_left && px <= retry_left + btn_w &&
-            py >= retry_top  && py <= retry_top + btn_h) {
+        if (HitTest(px, py, retry_left, btn_y, btn_w, btn_h)) {
             transition_request_.type = Transition::REPLACE;
             transition_request_.target_scene_id = static_cast<int>(SceneID::GAMEPLAY);
+            // 带谱面路径重试
+            transition_request_.payload.chart_path = chart_path_;
+            transition_request_.payload.audio_path = audio_path_;
             return;
         }
     }

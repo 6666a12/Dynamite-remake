@@ -7,12 +7,6 @@
 
 static constexpr float HOLD_SEG_PX = 180.0f;
 
-static inline uint32_t PackColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-    return static_cast<uint32_t>(r)
-         | (static_cast<uint32_t>(g) << 8)
-         | (static_cast<uint32_t>(b) << 16)
-         | (static_cast<uint32_t>(a) << 24);
-}
 
 static inline uint32_t ApplyAlpha(uint32_t color, float alpha) {
     uint8_t a = static_cast<uint8_t>(255.0f * std::max(0.0f, std::min(1.0f, alpha)));

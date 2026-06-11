@@ -240,6 +240,28 @@ if(PLATFORM_DESKTOP)
     )
     
     message(STATUS "Test executable 'test_core' will be built")
+    
+    # Catch2 测试可执行文件
+    add_executable(test_core_catch2 
+        src/test_main.cpp
+        src/test_core_catch2.cpp
+        src/test_core_extended.cpp
+        src/test_render_chain.cpp
+        third_party/catch2/catch_amalgamated.cpp
+    )
+    target_link_libraries(test_core_catch2 PRIVATE gamecore)
+    target_include_directories(test_core_catch2 PRIVATE
+        third_party/catch2
+    )
+    
+    add_custom_command(TARGET test_core_catch2 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/../assets
+        $<TARGET_FILE_DIR:test_core_catch2>/assets
+        COMMENT "Copying assets to catch2 test directory"
+    )
+    
+    message(STATUS "Catch2 test executable 'test_core_catch2' will be built")
 endif()
 
 # =============================================================================

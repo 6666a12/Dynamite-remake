@@ -5,8 +5,7 @@
 #include <memory>
 #include "chart_parser.h"
 
-// 前向声明
-class Texture;
+#include "utils/texture.h"
 struct NoteSkin;
 
 /**
@@ -46,7 +45,8 @@ public:
     void submitText(const std::string& text,
                     float x, float y,
                     float scale,
-                    uint32_t color);
+                    uint32_t color,
+                    bool monospace = false);
 
         // 绘制填充矩形（无纹理）
     void submitRect(float x, float y, float w, float h, uint32_t color);

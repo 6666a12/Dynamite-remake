@@ -1,3 +1,12 @@
+# IDE / editor
+.hermes/
+.vscode/
+.idea/
+
+# Build output
+core/build/
+
+# Dependencies (submodule / vendored)
 /android
 /ios
 /tools
@@ -6,6 +15,14 @@
 /core/third_party/miniaudio
 /core/third_party/SDL3
 
+# Large binary packages (extracted to assets/)
+*.zip
+
+# OS junk
+Thumbs.db
+.DS_Store
+
+# Legacy docs (auto-generated)
 docs/development_progress.md
 core/docs/fixes.md
 docs/api_spec.md

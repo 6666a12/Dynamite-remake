@@ -17,6 +17,9 @@ public:
     // 在 miniaudio 数据回调中累加已播放采样数（每通道）
     void onSamplesPlayed(int frames);
 
+    // 显式重置时钟（用于新游戏会话开始）
+    void reset() { sample_count_.store(0, std::memory_order_release); }
+
     // 线程安全，返回自播放开始的毫秒数（double）
     double nowMs() const;
 

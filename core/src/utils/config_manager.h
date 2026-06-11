@@ -22,6 +22,14 @@ public:
     void setOffsetMs(int ms);
     void setNoteSpeed(float speed);
 
+    // 演奏修改器（新增）
+    bool mirrorMod() const;
+    bool bleedMod() const;
+    bool autoPlay() const;
+    void setMirrorMod(bool v);
+    void setBleedMod(bool v);
+    void setAutoPlay(bool v);
+
 private:
     ConfigManager() = default;
     ~ConfigManager() = default;

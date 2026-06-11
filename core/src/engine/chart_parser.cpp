@@ -227,8 +227,8 @@ std::optional<Chart> ChartParser::parseXmlString(const std::string& xml_str) {
 
     // ---- 解析 notes（使用 beatToSecVar）----
     auto parseNoteSection = [&](const std::string& sec, SideType side) {
-        std::regex sec_re("<" + sec + R"([\s\S]*?</)" + sec + ">)",
-                         std::regex::icase);
+        std::string sec_pat = "<" + sec + R"([\s\S]*?</)" + sec + ">";
+        std::regex sec_re(sec_pat, std::regex::icase);
         std::smatch sm_sec;
         if (!std::regex_search(xml_str, sm_sec, sec_re)) return;
         std::string sec_content = sm_sec[0].str();
@@ -272,6 +272,10 @@ std::optional<Chart> ChartParser::parseXmlString(const std::string& xml_str) {
     parseNoteSection("m_notes", SideType::DOWN);
     parseNoteSection("m_notesLeft", SideType::LEFT);
     parseNoteSection("m_notesRight", SideType::RIGHT);
+
+    // 按时间排序（跨 section 的 notes 可能乱序）
+    std::stable_sort(chart.notes.begin(), chart.notes.end(),
+        [](const NoteData& a, const NoteData& b) { return a.time_ms < b.time_ms; });
 
     // ---- HOLD duration 计算 ----
     for (auto& n : chart.notes) {
@@ -533,6 +537,9 @@ std::optional<Chart> ChartParser::parse(const std::string& path) {
         if (charts && !charts->empty()) return charts->front();
         return std::nullopt;
     }
+    if (ext == ".chart") {
+        return readChart(path);
+    }
     return std::nullopt;
 }
 
@@ -677,25 +684,41 @@ std::optional<Chart> ChartParser::readChart(const std::string& path) {
     }
 
     uint32_t notes_count = readU32(is);
+    // Safety: reject unreasonably large note counts (corrupt data)
+    if (notes_count > 500000) return std::nullopt;
     chart.notes.reserve(notes_count);
+    
+    // v1 legacy format: 46 bytes/note (no time_sec, no next_id)
+    // v3+ format: 58 bytes/note
+    const bool is_legacy = (version < 3);
+    
     for (uint32_t i = 0; i < notes_count; ++i) {
         NoteData n{};
         n.id = readU32(is);
         n.type = static_cast<NoteType>(is.get());
-        n.time_sec = readF64(is);
-        n.time_ms = readU64(is);
+        if (is_legacy) {
+            // v1: only time_ms (u64), no time_sec
+            n.time_ms = readU64(is);
+            n.time_sec = static_cast<double>(n.time_ms) / 1000.0;
+        } else {
+            n.time_sec = readF64(is);
+            n.time_ms = readU64(is);
+        }
         n.side = static_cast<SideType>(is.get());
         n.position = readF32(is);
         n.width = readF32(is);
         n.sub_id = readU32(is);
         n.duration_ms = readU64(is);
         n.flags = readU32(is);
-        n.next_id = readU32(is);
+        if (!is_legacy) {
+            n.next_id = readU32(is);
+        }
         is.read(n.reserved, 8);
         chart.notes.push_back(n);
     }
 
     uint32_t bpm_count = readU32(is);
+    if (bpm_count > 500000) return std::nullopt;
     chart.bpm_events.reserve(bpm_count);
     for (uint32_t i = 0; i < bpm_count; ++i) {
         BPMEvent bpm{};

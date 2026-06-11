@@ -122,12 +122,15 @@ void JudgeEngine::update(int64_t audio_now_ms, const std::vector<RawTouch>& touc
         if (an.judged) {
             continue;
         }
-        if (an.type == static_cast<uint32_t>(NoteType::HOLD_BODY)) {
+        if (an.type == static_cast<uint32_t>(NoteType::HOLD_BODY) ||
+            an.type == static_cast<uint32_t>(NoteType::HOLD_TAIL)) {
+            // HOLD_BODY 和 HOLD_TAIL 不参与正常判定流程，
+            // HOLD_TAIL 由 processHold 统一管理（防 auto-miss 双判）
             continue;
         }
 
         // ---- Auto Miss 检测（所有类型通用）----
-        if (audio_now_ms > an.time_ms + window_miss) {
+        if (audio_now_ms >= an.time_ms + window_miss) {
             an.judged = true;
             frame_results_.push_back({
                 JudgeType::MISS,
@@ -206,13 +209,12 @@ void JudgeEngine::update(int64_t audio_now_ms, const std::vector<RawTouch>& touc
         }
 
         // ============================================================
-        // TAP / HOLD_HEAD / HOLD_TAIL / MULTI 判定（原逻辑）
+        // TAP / HOLD_HEAD / MULTI 判定（HOLD_TAIL 已在上方 skip）
         // ============================================================
         // 触摸匹配：跳过 SLIDE（已在上面处理）
         if (an.type != static_cast<uint32_t>(NoteType::TAP) &&
             an.type != static_cast<uint32_t>(NoteType::HOLD_HEAD) &&
-            an.type != static_cast<uint32_t>(NoteType::MULTI) &&
-            an.type != static_cast<uint32_t>(NoteType::HOLD_TAIL)) {
+            an.type != static_cast<uint32_t>(NoteType::MULTI)) {
             continue;
         }
 
@@ -330,6 +332,22 @@ JudgeType JudgeEngine::judgeSlideTiming(int64_t delta_ms) const {
 }
 
 void JudgeEngine::processHold(int64_t now_ms, const std::vector<RawTouch>& touches) {
+    // 辅助：标记 HOLD_TAIL 在 active_notes_ 中为已判定，防止后续 auto-miss
+    auto markTailJudged = [this](uint32_t head_id) {
+        for (auto& an : active_notes_) {
+            if (an.id == head_id && an.type == static_cast<uint32_t>(NoteType::HOLD_HEAD)) {
+                uint32_t tail_id = an.sub_id;
+                for (auto& tail : active_notes_) {
+                    if (tail.id == tail_id &&
+                        tail.type == static_cast<uint32_t>(NoteType::HOLD_TAIL)) {
+                        tail.judged = true;
+                        return;
+                    }
+                }
+            }
+        }
+    };
+
     for (auto it = active_holds_.begin(); it != active_holds_.end(); ) {
         HoldState& hs = *it;
 
@@ -357,6 +375,7 @@ void JudgeEngine::processHold(int64_t now_ms, const std::vector<RawTouch>& touch
                 true
             });
             updateStats(JudgeType::MISS);
+            markTailJudged(hs.note_id);
             it = active_holds_.erase(it);
             continue;
         }
@@ -372,6 +391,7 @@ void JudgeEngine::processHold(int64_t now_ms, const std::vector<RawTouch>& touch
                 true
             });
             updateStats(tail_result);
+            markTailJudged(hs.note_id);
             it = active_holds_.erase(it);
             continue;
         }
@@ -389,6 +409,8 @@ void JudgeEngine::projectVerticalJudge(std::vector<RawTouch>& touches) const {
     //
     // 投影结果：原触摸保留用于 LEFT/RIGHT 判定，
     //          新增触摸（y 投影到底判线）用于 DOWN 判定。
+    // 判定区域常量（与 isTouchInSide 中的定义重复——有意为之：
+    // 这些是文件局部常量，编译期完全内联，零运行时开销。集中到头文件会增加包含依赖）
     constexpr float kLeftJudgeX   = 108.0f / 1920.0f;
     constexpr float kRightJudgeX  = 1812.0f / 1920.0f;
     constexpr float kBottomJudgeY = 945.0f / 1080.0f;
@@ -461,9 +483,7 @@ bool JudgeEngine::isTouchInSide(const RawTouch& touch, SideType side) const {
     //   DOWN 区域: x 在左右判线之间, y 在屏幕下半部(>=0.5)到底判线附近
     constexpr float kLeftJudgeX   = 108.0f / 1920.0f;
     constexpr float kRightJudgeX  = 1812.0f / 1920.0f;
-    constexpr float kBottomJudgeY = 945.0f / 1080.0f;
     constexpr float kHalfWidth    = 24.0f / 1920.0f;
-    constexpr float kHalfHeight   = 24.0f / 1080.0f;
     constexpr float kHalfScreenY  = 0.5f;
 
     switch (side) {

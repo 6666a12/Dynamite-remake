@@ -21,6 +21,8 @@ private:
     JudgeEngine::Stats stats_;
     std::string song_title_;
     std::string difficulty_;
+    std::string chart_path_;     // 重试用
+    std::string audio_path_;     // 重试用
     int level_ = 0;
 
     float anim_score_ = 0.0f;

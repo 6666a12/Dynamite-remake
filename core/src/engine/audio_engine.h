@@ -25,6 +25,12 @@ public:
     void stop();
     bool isPlaying() const;
 
+    // 显式重置音频时钟（新游戏会话开始时调用）
+    void resetClock() { clock_.reset(); }
+
+    // 查询解码器是否已到达文件末尾
+    bool hasReachedEnd() const;
+
     AudioClock& clock() { return clock_; }
     const AudioClock& clock() const { return clock_; }
 
@@ -36,6 +42,7 @@ private:
     std::unique_ptr<ma_device> device_;
     std::unique_ptr<ma_decoder> decoder_;
     bool is_playing_ = false;
+    bool reached_end_ = false;  // 解码器已到达文件末尾
 
     static void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount);
 };

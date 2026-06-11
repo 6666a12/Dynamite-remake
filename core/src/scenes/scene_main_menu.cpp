@@ -9,16 +9,9 @@
 #include "engine/input_manager.h"
 #include "utils/logger.h"
 #include <cmath>
+#include "../gameplay/gameplay_ui_config.hpp"
 
-static constexpr int kDesignW = 1920;
-static constexpr int kDesignH = 1080;
 
-static inline uint32_t PackColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-    return static_cast<uint32_t>(r)
-         | (static_cast<uint32_t>(g) << 8)
-         | (static_cast<uint32_t>(b) << 16)
-         | (static_cast<uint32_t>(a) << 24);
-}
 
 // ============================================================
 // 生命周期
@@ -36,7 +29,7 @@ void SceneMainMenu::exit() {
 }
 
 void SceneMainMenu::update(int64_t audio_now_ms) {
-    (void)audio_now_ms;
+    stripe_time_ms_ = audio_now_ms;  // 驱动斜纹滚动
 }
 
 // ============================================================
@@ -85,7 +78,7 @@ void SceneMainMenu::render(RenderBatch& batch, int64_t audio_now_ms) {
 
 void SceneMainMenu::drawTopBar(RenderBatch& batch) {
     // 顶部栏背景
-    batch.submitRect(0.0f, 0.0f, static_cast<float>(kDesignW), kTopBarH,
+    batch.submitRect(0.0f, 0.0f, static_cast<float>(kDesignW), kHeaderH,
                      PackColor(26, 26, 31, 255));
 
     // 用户名（左对齐）
@@ -114,9 +107,16 @@ void SceneMainMenu::drawMenuButtons(RenderBatch& batch) {
 }
 
 void SceneMainMenu::drawFooter(RenderBatch& batch) {
-    batch.submitRect(0.0f, static_cast<float>(kDesignH) - kFooterH,
+    const float ft_y = static_cast<float>(kDesignH) - kFooterH;
+    batch.submitRect(0.0f, ft_y,
                      static_cast<float>(kDesignW), kFooterH,
-                     PackColor(15, 15, 15, 200));
+                     PackColor(15, 15, 15, 240));
+    // 45° 斜纹覆盖 (方向=1: 向右滚动)
+    float stripe_offset = static_cast<float>(stripe_time_ms_) * 0.05f;
+    batch.submitStripedRect(0.0f, ft_y, static_cast<float>(kDesignW), kFooterH,
+                            PackColor(15, 15, 15, 0),
+                            PackColor(30, 30, 30, 64),
+                            1, stripe_offset);
 
     batch.submitText("v0.1.0 - Dynamite Rebuild",
                      static_cast<float>(kDesignW) * 0.5f - 100.0f,
@@ -138,20 +138,21 @@ void SceneMainMenu::handleInput(const std::vector<RawTouch>& touches,
         float px = t.x * kDesignW;
         float py = t.y * kDesignH;
 
-        // 检测哪个按钮被点击
+        // 主菜单按钮（HitTest 自动膨胀到 ≥44dp）
         for (const auto& btn : buttons_) {
-            if (px >= btn.x && px <= btn.x + btn.w &&
-                py >= btn.y && py <= btn.y + btn.h) {
+            if (HitTest(px, py, btn.x, btn.y, btn.w, btn.h)) {
                 transition_request_.type = Transition::PUSH;
                 transition_request_.target_scene_id = static_cast<int>(btn.target_scene);
                 return;
             }
         }
 
-        // 右上角设置
-        if (px >= static_cast<float>(kDesignW) - 140.0f && py <= kTopBarH) {
-            // 设置页暂未实现
-            Logger::info("Settings button pressed (not implemented)");
+        // 右上角 SETTINGS 按钮（渲染在 kDesignW-140, 22, scale 0.8）
+        if (HitTest(px, py, static_cast<float>(kDesignW) - 144.0f, 0.0f,
+                    144.0f, kHeaderH)) {
+            transition_request_.type = Transition::PUSH;
+            transition_request_.target_scene_id = static_cast<int>(SceneID::SETTINGS);
+            return;
         }
     }
 }

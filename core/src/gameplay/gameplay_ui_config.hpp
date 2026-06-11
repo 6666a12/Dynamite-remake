@@ -7,16 +7,20 @@
  * 所有值基于 1920x1080 设计分辨率。
  * 实际渲染时会经过 viewport 变换等比缩放 + 居中。
  */
+
+// 颜色打包工具函数（必须在 struct 外定义为自由 constexpr 函数，
+// 因为 GCC 16 对 class body 内的 constexpr 前向引用检查更严格）
+constexpr uint32_t PackColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    return static_cast<uint32_t>(r)
+         | (static_cast<uint32_t>(g) << 8)
+         | (static_cast<uint32_t>(b) << 16)
+         | (static_cast<uint32_t>(a) << 24);
+}
+
 struct GameplayUI {
     // ============================================================
     // 颜色（RGBA）
     // ============================================================
-    static constexpr uint32_t PackColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-        return static_cast<uint32_t>(r)
-             | (static_cast<uint32_t>(g) << 8)
-             | (static_cast<uint32_t>(b) << 16)
-             | (static_cast<uint32_t>(a) << 24);
-    }
 
     // 难度标签
     static constexpr uint32_t CLR_DIFF_NORMAL = PackColor(68, 170, 68, 255);   // 绿色

@@ -1,0 +1,14 @@
+{
+  "id": "003",
+  "title": "累乗のカルマ",
+  "artist": "Metomate",
+  "bpm": 178.0,
+  "duration_sec": 90,
+  "difficulties": {
+    "MEGA": {
+      "level": 13,
+      "constant": 13.0
+    }
+  },
+  "noter": "Exponential Kutori"
+}

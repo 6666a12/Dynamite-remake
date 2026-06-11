@@ -41,12 +41,14 @@ void RenderBatchRenderer::DrawTexture(const Texture* tex, float x, float y,
 }
 
 void RenderBatchRenderer::DrawText(const std::string& text, float x, float y,
-                                    float scale, uint32_t color) {
+                                    float scale, uint32_t color,
+                                    bool monospace) {
     batch_->submitText(text,
         x * scale_ + offset_x_,
         y * scale_ + offset_y_,
         scale * scale_,
-        color);
+        color,
+        monospace);
 }
 
 const Texture* RenderBatchRenderer::GetNoteTapTex() const {

@@ -30,7 +30,12 @@ void ConfigManager::init(const std::string& config_path) {
         "user": {
             "offset_ms": 0,
             "note_speed": 1.3
-        }
+        },
+        "play_mods": {
+            "mirror": false,
+            "bleed": false
+        },
+        "auto_play": false
     })");
     save();
     Logger::info("ConfigManager: 已创建默认配置文件 {}", filepath_);
@@ -84,4 +89,26 @@ void ConfigManager::setOffsetMs(int ms) {
 }
 void ConfigManager::setNoteSpeed(float speed) {
     data_["user"]["note_speed"] = speed;
+}
+
+// ============================================================
+// 演奏修改器
+// ============================================================
+bool ConfigManager::mirrorMod() const {
+    return data_.value("play_mods", nlohmann::json::object()).value("mirror", false);
+}
+bool ConfigManager::bleedMod() const {
+    return data_.value("play_mods", nlohmann::json::object()).value("bleed", false);
+}
+bool ConfigManager::autoPlay() const {
+    return data_.value("auto_play", false);
+}
+void ConfigManager::setMirrorMod(bool v) {
+    data_["play_mods"]["mirror"] = v;
+}
+void ConfigManager::setBleedMod(bool v) {
+    data_["play_mods"]["bleed"] = v;
+}
+void ConfigManager::setAutoPlay(bool v) {
+    data_["auto_play"] = v;
 }
